@@ -1,0 +1,21 @@
+# 核心计算与数据处理框架
+pandas>=2.0.0
+numpy>=1.24.0
+pyarrow>=12.0.0
+scipy>=1.10.0
+
+# Excel 文件读写支持 (必须包含，以支持 pd.read_excel 和 pd.DataFrame.to_excel)
+openpyxl>=3.1.2
+
+# 网络请求模块 (Step A 数据下载依赖)
+requests>=2.31.0
+
+# 现代图形界面框架 (Main / Step 4)
+PySide6>=6.5.0
+
+# 商业制图与可视化引擎 (Step 4 看板依赖)
+matplotlib>=3.7.0
+mplcursors>=0.5.2
+
+# 注意：如果您在 Windows 环境下运行（并非必须，Mac使用内置AppleScript），可能还需要安装：
+# pywin32

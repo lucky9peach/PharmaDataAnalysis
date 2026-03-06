@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.pkl
+.venv/
+venv/
+env/
+
+# OS
+.DS_Store
+
+# Project specific
+Cache/
+TSM_Downloads/
+*.xlsx
+*.parquet
