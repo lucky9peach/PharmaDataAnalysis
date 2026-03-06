@@ -329,7 +329,7 @@ class EuropeanAnalysisPage(QWidget):
         
         self.tab_names = [
             "0. 战略决策 (Global)", "1. 趋势分析 (Trend)", "2. 原研渗透率", 
-            "3. 仿制药格局", "4. 机会矩阵", "5. 智能预测"
+            "3. 全市场格局", "4. 机会矩阵", "5. 智能预测"
         ]
         self.tab_widgets = {}
         for name in self.tab_names:
@@ -378,23 +378,9 @@ class EuropeanAnalysisPage(QWidget):
         import core_config
         from PySide6.QtGui import QStandardItem
         
-        auto_checks = []
-        api_upper = str(api_name).upper()
-        for key, comps in list(ORIGINATOR_CONFIG.items()) + list(getattr(core_config, 'ORIGINATOR_CONFIG', {}).items()):
-            if key in api_upper:
-                auto_checks.extend([str(c).upper() for c in comps])
-                
         model = self.originator_combo.model()
         for c in sorted_comps:
-            item = QStandardItem(str(c))
-            item.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled)
-            is_orig = False
-            for ac in auto_checks:
-                if ac in str(c).upper():
-                    is_orig = True
-                    break
-            item.setCheckState(Qt.Checked if is_orig else Qt.Unchecked)
-            model.appendRow(item)
+            self.originator_combo.addCheckableItem(str(c), checked=False)
             
         self.originator_combo.updateText()
         self.originator_combo.blockSignals(False)
@@ -453,21 +439,18 @@ class EuropeanAnalysisPage(QWidget):
         c_stats = df_clean.groupby('国家')['Sales_Clean'].sum().sort_values(ascending=False)
         self.analyzer.current_countries = c_stats.head(15).index.tolist()
         self.analyzer.df_sales_clean = df_clean
-        
-        # 只保留仿制药的子集
-        df_gen = df_clean[~df_clean['集团/企业'].isin(self.analyzer.selected_companies_for_originator)].copy()
 
         # 5. 生成所有图表并嵌入 QTabWidget
         self._render_tab(self.tab_widgets["0. 战略决策 (Global)"], self.analyzer.draw_summary_table, df_clean)
         self._render_tab(self.tab_widgets["1. 趋势分析 (Trend)"], self.analyzer.draw_trend, df_clean)
         self._render_tab(self.tab_widgets["2. 原研渗透率"], self.analyzer.draw_penetration, df_clean)
-        # 解除翻页国家限制，画满画板，自动滚动长图
-        self._render_tab(self.tab_widgets["3. 仿制药格局"], lambda f, d: self.analyzer.draw_pie_batch(f, d, self.analyzer.current_countries), df_gen)
+        # 解除翻页国家限制，画满画板，自动滚动长图，此时包含原研企业数据
+        self._render_tab(self.tab_widgets["3. 全市场格局"], lambda f, d: self.analyzer.draw_pie_batch(f, d, self.analyzer.current_countries), df_clean)
         # 使用在 Promax 写好的冒泡图替代动态矩阵
         self._render_tab(self.tab_widgets["4. 机会矩阵"], self.analyzer.draw_bubble_matrix, df_clean)
         self._render_tab(self.tab_widgets["5. 智能预测"], self.analyzer.draw_prediction, df_clean)
 
-        self.tips_label.setText(f"分析完成！当前判定为原研企业: {', '.join(self.analyzer.selected_companies_for_originator) or '无(纯仿制市场)'}")
+        self.tips_label.setText(f"分析完成！当前指定原研企业: {', '.join(self.analyzer.selected_companies_for_originator) or '未指定 (将视作全仿制药市场分析)'}")
 
     def _render_tab(self, parent_widget, draw_func, df):
         layout = parent_widget.layout()
@@ -502,6 +485,7 @@ class EuropeanAnalysisPage(QWidget):
         container_layout.addLayout(btn_layout)
         
         canvas = FigureCanvas(fig)
+        canvas.wheelEvent = lambda event: event.ignore() # 防止内部图表拦截滚轮
         
         report_text = ""
         try:
@@ -751,21 +735,24 @@ class MainWindow(QMainWindow):
                 base_dir = os.path.dirname(os.path.abspath(__file__))
                 test_dir = os.path.join(base_dir, test_dir.lstrip('/'))
                 
-                if os.path.exists(test_dir):
-                    files = os.listdir(test_dir)
-                    dfs = []
-                    for f in files:
-                        if f.endswith('.parquet'):
-                            p = os.path.join(test_dir, f)
-                            dfs.append(pd.read_parquet(p))
-                    
-                    if dfs:
-                        combined_df = pd.concat(dfs, ignore_index=True)
-                        if index == 4:
-                            self.page4.set_dataframe(combined_df)
-                            self.page4.on_filter_changed({})
-                        elif index == 5:
-                            self.page5.set_data(combined_df)
+                if not hasattr(self, '_cached_combined_df') or self._cached_combined_df is None:
+                    if os.path.exists(test_dir):
+                        files = os.listdir(test_dir)
+                        dfs = []
+                        for f in files:
+                            if f.endswith('.parquet'):
+                                p = os.path.join(test_dir, f)
+                                dfs.append(pd.read_parquet(p))
+                        
+                        if dfs:
+                            self._cached_combined_df = pd.concat(dfs, ignore_index=True)
+                
+                if self._cached_combined_df is not None and not self._cached_combined_df.empty:
+                    if index == 4:
+                        self.page4.set_dataframe(self._cached_combined_df)
+                        self.page4.on_filter_changed({})
+                    elif index == 5:
+                        self.page5.set_data(self._cached_combined_df)
             except Exception as e:
                 import traceback
                 print("Failed to auto-load databse for plotting:", traceback.format_exc())
@@ -781,6 +768,7 @@ class MainWindow(QMainWindow):
         self.page3.execute()
         
     def on_step3_done(self, out_dir):
+        self._cached_combined_df = None # 置空缓存，强制重新读取
         self.switch_page(3)
 
 

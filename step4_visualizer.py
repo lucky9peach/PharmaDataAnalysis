@@ -44,14 +44,40 @@ import mplcursors
 class CheckableComboBox(QComboBox):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setModel(QStandardItemModel(self))
+        self.source_model = QStandardItemModel(self)
+        self.source_model.dataChanged.connect(self.updateText)
+        
+        from PySide6.QtCore import QSortFilterProxyModel
+        self.pFilterModel = QSortFilterProxyModel(self)
+        self.pFilterModel.setFilterCaseSensitivity(Qt.CaseInsensitive)
+        self.pFilterModel.setSourceModel(self.source_model)
+        
+        self.setModel(self.pFilterModel)
         self.view().pressed.connect(self.handleItemPressed)
-        self.model().dataChanged.connect(self.updateText)
         self._changed = False
         
         self.setEditable(True)
-        self.lineEdit().setReadOnly(True)
+        # 允许用户输入进行搜索过滤
+        self.lineEdit().setReadOnly(False)
+        self.lineEdit().setPlaceholderText("可输入文本搜索或下拉勾选...")
         self.lineEdit().installEventFilter(self)
+        self.lineEdit().textEdited.connect(self._on_text_edited)
+
+        self.updateText()
+        
+    def _on_text_edited(self, text):
+        self.pFilterModel.setFilterRegularExpression(text)
+        self.showPopup()
+        
+    def addCheckableItem(self, text, checked=False):
+        item = QStandardItem(text)
+        item.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled)
+        item.setData(Qt.Checked if checked else Qt.Unchecked, Qt.CheckStateRole)
+        self.source_model.appendRow(item)
+        
+    def clear(self):
+        self.source_model.clear()
+        super().clear()
         self.updateText()
         
     def eventFilter(self, widget, event):
@@ -61,7 +87,9 @@ class CheckableComboBox(QComboBox):
         return super().eventFilter(widget, event)
         
     def handleItemPressed(self, index):
-        item = self.model().itemFromIndex(index)
+        # 注意：因为用了 filter proxy model，点击拿到的 index 是 proxy_index，需要转回 source_index
+        source_index = self.pFilterModel.mapToSource(index)
+        item = self.source_model.itemFromIndex(source_index)
         if item and item.isEnabled():
             if item.checkState() == Qt.Checked:
                 item.setCheckState(Qt.Unchecked)
@@ -72,9 +100,16 @@ class CheckableComboBox(QComboBox):
     def hidePopup(self):
         if not self._changed:
             super().hidePopup()
+            # 隐藏时恢复文本和清空过滤器
+            self.pFilterModel.setFilterRegularExpression("")
+            self.updateText()
         self._changed = False
 
     def updateText(self):
+        # 如果用户正在打字搜索，不要强制覆盖 lineEdit 里面的字
+        if self.lineEdit().hasFocus():
+            return
+            
         checked = self.get_checked_items()
         if checked:
             self.lineEdit().setText(", ".join(checked))
@@ -83,8 +118,8 @@ class CheckableComboBox(QComboBox):
 
     def get_checked_items(self):
         checkedItems = []
-        for i in range(self.count()):
-            item = self.model().item(i)
+        for i in range(self.source_model.rowCount()):
+            item = self.source_model.item(i)
             if item and item.checkState() == Qt.Checked:
                 checkedItems.append(item.text())
         return checkedItems
@@ -441,6 +476,8 @@ class AnalysisCard(QFrame):
         self.figure = Figure(figsize=(8, 6), dpi=100)
         self.figure.patch.set_facecolor('#ffffff')
         self.canvas = FigureCanvas(self.figure)
+        # 防止图表截获滚轮事件，让滚动条可以全区域工作
+        self.canvas.wheelEvent = lambda event: event.ignore()
         self.layout.addWidget(self.canvas)
         
     def show_popup(self, event):
@@ -844,7 +881,7 @@ class CountryMarketSharePieCard(AnalysisCard):
         self.exclude_combo = CheckableComboBox()
         self.exclude_combo.setMinimumWidth(200)
         self.exclude_combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        self.exclude_combo.model().dataChanged.connect(self.on_exclude_changed)
+        self.exclude_combo.source_model.dataChanged.connect(self.on_exclude_changed)
         
         self.layout.itemAt(0).layout().insertWidget(1, QLabel("手动排除企业:"))
         self.layout.itemAt(0).layout().insertWidget(2, self.exclude_combo)
@@ -885,18 +922,18 @@ class CountryMarketSharePieCard(AnalysisCard):
             item_orig = QStandardItem("【排除所有原研药】")
             item_orig.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled)
             item_orig.setData(Qt.Unchecked, Qt.CheckStateRole)
-            self.exclude_combo.model().appendRow(item_orig)
+            self.exclude_combo.source_model.appendRow(item_orig)
             for c in corps:
                 item = QStandardItem(c)
                 item.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled)
                 item.setData(Qt.Unchecked, Qt.CheckStateRole)
-                self.exclude_combo.model().appendRow(item)
+                self.exclude_combo.source_model.appendRow(item)
             self.exclude_combo.updateText()
             self.exclude_combo.blockSignals(False)
 
             # 如果侧边栏已配置原研药，自动帮勾上「排除所有原研药」
             if filters.get('originator_companies'):
-                m = self.exclude_combo.model()
+                m = self.exclude_combo.source_model
                 if m.item(0):
                     m.item(0).setCheckState(Qt.Checked)
                 self.exclude_combo.updateText()
@@ -1498,17 +1535,14 @@ class Step4DashboardWidget(QWidget):
                 apis = sorted(self.current_data['api_name'].dropna().unique().tolist())
                 self.sidebar.api_combo.clear()
                 for a in apis:
-                    item = QStandardItem(str(a))
-                    item.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled)
-                    item.setData(Qt.Unchecked, Qt.CheckStateRole)
-                    self.sidebar.api_combo.model().appendRow(item)
+                    self.sidebar.api_combo.addCheckableItem(str(a))
 
             # 2) 市场下拉：只展示 EEA+UK+美国，无其他
             market_combo = self.sidebar.market_combo
             market_combo.clear()
             market_combo.addItem("全部")
             market_combo.addItem("【欧洲经济区 (EEA+UK)】")
-            market_combo.addItem("【欧洲六大国 (EU Big5+UK)】")
+            market_combo.addItem("【欧洲五国 (EU Big5)】")
             market_combo.addItem("【美国】")
             market_combo.insertSeparator(market_combo.count())
             if 'market_region' in self.current_data.columns:
@@ -1542,10 +1576,7 @@ class Step4DashboardWidget(QWidget):
                             if kw.upper() in str(corp).upper():
                                 detected_origs.add(corp)
                 for orig in sorted(detected_origs):
-                    item = QStandardItem(orig)
-                    item.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled)
-                    item.setData(Qt.Unchecked, Qt.CheckStateRole)
-                    self.sidebar.originator_combo.model().appendRow(item)
+                    self.sidebar.originator_combo.addCheckableItem(orig)
 
     def on_filter_changed(self, filters: dict):
         """中继器处理：拦截 Filter 参数，下发给各个图表系统"""
@@ -1562,8 +1593,8 @@ class Step4DashboardWidget(QWidget):
             mkt = filters["market_region"]
             if mkt == "【欧洲经济区 (EEA+UK)】":
                 filtered_df = filtered_df[filtered_df["market_region"].isin(EEA_AND_UK_MARKETS)]
-            elif mkt == "【欧洲六大国 (EU Big5+UK)】":
-                filtered_df = filtered_df[filtered_df["market_region"].isin(core_config.EU_BIG5 + ["UNITED KINGDOM"])]
+            elif mkt == "【欧洲五国 (EU Big5)】":
+                filtered_df = filtered_df[filtered_df["market_region"].isin(core_config.EU_BIG5)]
             elif mkt == "【美国】":
                 filtered_df = filtered_df[filtered_df["market_region"].isin(US_MARKETS)]
             else:
@@ -1907,8 +1938,8 @@ class AnalysisEngineV24:
             
         fig.subplots_adjust(wspace=0.6, hspace=0.8)
         
-        text = f"【仿制药格局（已剔除原研药干扰）】\n   • 领头羊: {'; '.join(leaders[:3])}。\n\n"
-        text += "📊 【数据口径】: 仅计算非原研药企业的存量博弈份额。HHI(市场集中度)指数 = 仿制药企业市占率平方和。\n"
+        text = f"【全市场竞争格局】\n   • 领头羊: {'; '.join(leaders[:3])}。\n\n"
+        text += "📊 【数据口径】: 全局市场存量博弈份额。HHI(市场集中度)指数 = 企业市占率平方和。\n"
         text += "💡 【汇报话术】: “老板，HHI > 2500的地方（标红）代表已经形成了极强的寡头垄断，比如有本地大厂控盘，贸然进入大概率当炮灰；我们挑 HHI < 1500 的‘绿色’分散市场做横向盘整最有利可图。”"
         return text
 

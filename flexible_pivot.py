@@ -84,6 +84,8 @@ class FlexiblePivotWidget(QWidget):
             fig_container.fig = fig
             fig_container.canvas = canvas
             fig_container.ax = fig.add_subplot(111)
+            # 防止图表截获滚轮事件，让滚动条可以全区域工作
+            canvas.wheelEvent = lambda event: event.ignore()
             
             # 复制图表按钮
             btn_copy_fig = QPushButton("📋 复制此图表")
@@ -160,6 +162,10 @@ class FlexiblePivotWidget(QWidget):
             return
             
         try:
+            from PySide6.QtWidgets import QApplication
+            from PySide6.QtCore import Qt
+            QApplication.setOverrideCursor(Qt.WaitCursor)
+            
             df = pd.read_excel(file_path)
             
             # --- 核心降维清洗：只保留多维分析关心的列并翻译成易读中文 ---
@@ -171,18 +177,27 @@ class FlexiblePivotWidget(QWidget):
                 '国家': '国家/地区',
                 'market_region': '国家/地区',
                 
-                # 剂型类别
+                # 药品固有属性
                 '剂型': '细分剂型',
                 'formulation': '细分剂型',
                 'NFC1': '大类别',
+                '规格': '规格',
+                
+                # 公司属性
+                '集团/企业': '企业(MAH)',
+                'mah': '企业(MAH)',
                 
                 # 年份
                 '年份': '年份',
                 'year': '年份',
                 
                 # 销量与金额 (因为不同药下载列名带有空格和单位比如 "最小单包装销售数量 粒")
-                '最小单包装销售数量 粒': '销售数量(Unit)',
-                'sales_volume_units': '销售数量(Unit)',
+                '最小单包装销售数量 粒': '最小单包装销量(Unit)',
+                '最小单包装销售数量': '最小单包装销量(Unit)',
+                'sales_volume_units': '最小单包装销量(Unit)',
+                
+                '大包装销售数量 粒': '大包装销量(Box)',
+                '大包装销售数量': '大包装销量(Box)',
                 
                 '销售额': '销售金额(USD)',
                 'sales_value_usd': '销售金额(USD)',
@@ -197,8 +212,14 @@ class FlexiblePivotWidget(QWidget):
                     df.rename(columns={orig_col: '国家/地区'}, inplace=True)
                 elif '剂型' in orig_col or orig_col == 'formulation':
                     df.rename(columns={orig_col: '细分剂型'}, inplace=True)
-                elif '单包装' in orig_col or orig_col == 'sales_volume_units':
-                    df.rename(columns={orig_col: '销售数量(Unit)'}, inplace=True)
+                elif orig_col == '规格' or orig_col == 'strength_raw':
+                    df.rename(columns={orig_col: '规格'}, inplace=True)
+                elif '集团/企业' == orig_col or orig_col == 'mah':
+                    df.rename(columns={orig_col: '企业(MAH)'}, inplace=True)
+                elif '最小单包装销售数量' in orig_col or orig_col == 'sales_volume_units':
+                    df.rename(columns={orig_col: '最小单包装销量(Unit)'}, inplace=True)
+                elif '大包装销售数量' in orig_col:
+                    df.rename(columns={orig_col: '大包装销量(Box)'}, inplace=True)
                 elif orig_col == '销售额' or orig_col == 'sales_value_usd':
                     df.rename(columns={orig_col: '销售金额(USD)'}, inplace=True)
                 elif '公斤' in orig_col or orig_col == 'volume_api_kg':
@@ -208,18 +229,50 @@ class FlexiblePivotWidget(QWidget):
                     
             df_renamed = df
             
-            # 手工补齐如果缺失的列
-            if 'API' not in df_renamed.columns:
-                df_renamed['API'] = '未知API'
-            if '细分剂型' not in df_renamed.columns:
-                df_renamed['细分剂型'] = '未知剂型'
-                
-            # 清理数值列
-            for num_col in ['销售数量(Unit)', '销售金额(USD)', '原料药消耗量(KG)']:
-                if num_col in df_renamed.columns:
-                    df_renamed[num_col] = pd.to_numeric(df_renamed[num_col], errors='coerce').fillna(0)
+            # 手工补齐如果缺失的列，保持行不错乱
+            essential_cols = {
+                'API': '未知API', 
+                '国家/地区': '未知国家', 
+                '细分剂型': '未知剂型', 
+                '规格': '未知',
+                '企业(MAH)': '未知企业'
+            }
+            for col, fill_val in essential_cols.items():
+                if col not in df_renamed.columns:
+                    df_renamed[col] = fill_val
                 else:
+                    df_renamed[col] = df_renamed[col].fillna(fill_val)
+                    
+            # 核心数值列初始化
+            numeric_cols = ['最小单包装销量(Unit)', '大包装销量(Box)', '销售金额(USD)', '原料药消耗量(KG)']
+            for num_col in numeric_cols:
+                if num_col not in df_renamed.columns:
                     df_renamed[num_col] = 0.0
+                else:
+                    df_renamed[num_col] = pd.to_numeric(df_renamed[num_col], errors='coerce').fillna(0.0)
+
+            # 衍生计算列！这里保障核心推导逻辑的精确度
+            # 1. 求转换系数(每盒多少粒) = 最小单包装销量 / 大包装销量
+            # 使用 numpy divide 避免除 0 报错 (结果变 infinity)
+            df_renamed['装量系数(粒/盒)'] = np.where(
+                df_renamed['大包装销量(Box)'] > 0, 
+                df_renamed['最小单包装销量(Unit)'] / df_renamed['大包装销量(Box)'], 
+                np.nan
+            )
+            
+            # 2. 单价(每粒多少钱) = 销售额 / 最小单包装销量
+            df_renamed['颗粒单价(USD/Unit)'] = np.where(
+                df_renamed['最小单包装销量(Unit)'] > 0,
+                df_renamed['销售金额(USD)'] / df_renamed['最小单包装销量(Unit)'],
+                np.nan
+            )
+            
+            # 3. 出厂价 = 单价 * 0.3
+            df_renamed['预估出厂价(USD)'] = df_renamed['颗粒单价(USD/Unit)'] * 0.3
+            
+            # 重新整理精度的四舍五入
+            df_renamed['颗粒单价(USD/Unit)'] = df_renamed['颗粒单价(USD/Unit)'].round(6)
+            df_renamed['预估出厂价(USD)'] = df_renamed['预估出厂价(USD)'].round(6)
 
             self.df_raw = df_renamed
             
@@ -240,6 +293,9 @@ class FlexiblePivotWidget(QWidget):
         except Exception as e:
             import traceback
             QMessageBox.critical(self, "读取失败", f"发生了以下错误:\n{str(e)}\n\n{traceback.format_exc()}")
+        finally:
+            from PySide6.QtWidgets import QApplication
+            QApplication.restoreOverrideCursor()
 
     def on_api_changed(self, api_name):
         self.current_api = api_name
@@ -303,7 +359,7 @@ class FlexiblePivotWidget(QWidget):
         ax.clear()
 
         # 透视计算 (按国家汇总销量十年来总计)
-        df_agg = df.groupby('国家/地区')[['销售数量(Unit)', '销售金额(USD)']].sum().sort_values(by='销售数量(Unit)', ascending=False)
+        df_agg = df.groupby('国家/地区')[['最小单包装销量(Unit)', '销售金额(USD)']].sum().sort_values(by='最小单包装销量(Unit)', ascending=False)
         tab['df_pivot'] = df_agg # 保存结果准备导出
         
         self._fill_table(tab['table'], df_agg)
@@ -312,7 +368,7 @@ class FlexiblePivotWidget(QWidget):
         top_N = df_agg.head(15)
         if not top_N.empty:
             labels = top_N.index.tolist()
-            vals = top_N['销售数量(Unit)'].tolist()
+            vals = top_N['最小单包装销量(Unit)'].tolist()
             
             y_pos = np.arange(len(labels))
             
@@ -332,11 +388,14 @@ class FlexiblePivotWidget(QWidget):
 
     def render_tab2_formulation(self, df):
         tab = self.tab_widgets["💊 主力剂型分布 (Formulation)"]
+        fig = tab['fig']
         ax = tab['ax']
-        ax.clear()
+        fig.clf()
+        ax = fig.add_subplot(111)
+        tab['ax'] = ax
 
         # 剂型透视
-        df_agg = df.groupby('细分剂型')[['销售数量(Unit)', '销售金额(USD)', '原料药消耗量(KG)']].sum().sort_values(by='销售数量(Unit)', ascending=False)
+        df_agg = df.groupby('细分剂型')[['最小单包装销量(Unit)', '销售金额(USD)', '原料药消耗量(KG)']].sum().sort_values(by='最小单包装销量(Unit)', ascending=False)
         tab['df_pivot'] = df_agg
         
         self._fill_table(tab['table'], df_agg)
@@ -348,11 +407,11 @@ class FlexiblePivotWidget(QWidget):
             others = df_agg.iloc[N:].sum()
             
             labels = top_N.index.tolist()
-            sizes = top_N['销售数量(Unit)'].tolist()
+            sizes = top_N['最小单包装销量(Unit)'].tolist()
             
-            if not others.empty and others['销售数量(Unit)'] > 0:
+            if not others.empty and others['最小单包装销量(Unit)'] > 0:
                 labels.append('其他小众剂型')
-                sizes.append(others['销售数量(Unit)'])
+                sizes.append(others['最小单包装销量(Unit)'])
                 
             # 过滤掉 0 大小的保证不死轴
             clean_labels = [l for l, s in zip(labels, sizes) if s > 0]
@@ -374,14 +433,19 @@ class FlexiblePivotWidget(QWidget):
 
     def render_tab3_crosstab(self, df):
         tab = self.tab_widgets["🔀 终极交叉透视 (国家 x 剂型)"]
+        fig = tab['fig']
         ax = tab['ax']
-        ax.clear()
+        
+        # 为了彻底清除以前画的 colorbar 相关 axes，最安全的做法是清空整个 figure 重新加子图
+        fig.clf()
+        ax = fig.add_subplot(111)
+        tab['ax'] = ax
         
         # 双维交叉表 (Rows=国家, Cols=剂型, Values=销量)
         # 用 pivot_table 
         pt = pd.pivot_table(
             df, 
-            values='销售数量(Unit)', 
+            values='最小单包装销量(Unit)', 
             index='国家/地区', 
             columns='细分剂型', 
             aggfunc='sum', 
@@ -435,9 +499,7 @@ class FlexiblePivotWidget(QWidget):
             ax.invert_yaxis() # 国家排序 排名高的在上面
             
             fig = tab['fig']
-            if getattr(fig, 'cb', None):
-                fig.cb.remove()
-            fig.cb = fig.colorbar(scatter, ax=ax, label='销量 (Unit)', anchor=(0, 0.5), shrink=0.7)
+            fig.colorbar(scatter, ax=ax, label='最小单包装销量 (Unit)', anchor=(0, 0.5), shrink=0.7)
             
             fig.tight_layout()
             tab['canvas'].draw()
