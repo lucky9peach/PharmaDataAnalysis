@@ -15,6 +15,7 @@ import step_a_download
 import step_b_clean
 from step3_standardize import StandardizationEngine
 from step4_visualizer import Step4DashboardWidget, CheckableComboBox, ClipboardHelper
+from flexible_pivot import FlexiblePivotWidget
 from step4_visualizer import AnalysisEngineV24
 import core_config
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
@@ -683,6 +684,7 @@ class MainWindow(QMainWindow):
             "1. 数据底座提取", 
             "2. 剂型规格清洗", 
             "3. 核心分片标准化", 
+            "🔮 [可选] 多维综合透视矩阵",
             "4. 市场情报看板 (Dashboard)",
             "5. 欧洲市场深度分析"
         ]
@@ -704,12 +706,14 @@ class MainWindow(QMainWindow):
         self.page1 = Step1Widget()
         self.page2 = Step2Widget()
         self.page3 = Step3Widget()
-        self.page4 = Step4DashboardWidget()
-        self.page5 = EuropeanAnalysisPage()
+        self.page_pivot = FlexiblePivotWidget() # 插入点: index = 3
+        self.page4 = Step4DashboardWidget() # index = 4
+        self.page5 = EuropeanAnalysisPage() # index = 5
         
         self.stack.addWidget(self.page1)
         self.stack.addWidget(self.page2)
         self.stack.addWidget(self.page3)
+        self.stack.addWidget(self.page_pivot)
         self.stack.addWidget(self.page4)
         self.stack.addWidget(self.page5)
         
@@ -724,12 +728,18 @@ class MainWindow(QMainWindow):
         self.stack.setCurrentIndex(index)
         
         # 更新指示器高亮逻辑
-        states = ['[1]', '[2]', '[3]', '[4]', '[5]']
+        states = ['[1]', '[2]', '[3]', '[Pivot]', '[4]', '[5]']
         states[index] = f"<span style='color:#3182ce;'>{states[index]}</span>"
         self.progress_indicator.setText(" ➔ ".join(states))
         
+        # 激活 Pivot 组件时尝试自动重新装载最新下发的底层数据
+        if index == 3:
+            # 如果从没读过数据或用户切到这里，顺手帮加载
+            if self.page_pivot.df_raw is None:
+                self.page_pivot.load_data()
+
         # Step 4 / 5 特定逻辑
-        if index == 3 or index == 4:
+        if index == 4 or index == 5:
             self.showMaximized()
             # 尝试加载所有 API cache file 塞给视图层
             try:
@@ -751,10 +761,10 @@ class MainWindow(QMainWindow):
                     
                     if dfs:
                         combined_df = pd.concat(dfs, ignore_index=True)
-                        if index == 3:
+                        if index == 4:
                             self.page4.set_dataframe(combined_df)
                             self.page4.on_filter_changed({})
-                        elif index == 4:
+                        elif index == 5:
                             self.page5.set_data(combined_df)
             except Exception as e:
                 import traceback
