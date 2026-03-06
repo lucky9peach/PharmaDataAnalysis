@@ -159,13 +159,19 @@ def download_and_aggregate_tsm(
                                 is_json_err = False
                                 try:
                                     jdata = json.loads(result)
-                                    if str(jdata.get("ret")) == "0": is_json_err = True
-                                except: pass
+                                    is_json_err = True  # 如果能成功解析为JSON，说明是报错信息/空数据提醒，并不是正确的下载UUID
+                                except: 
+                                    pass
                                 
+                                if is_json_err:
+                                    log_callback(f"    [-] TSM数据库提示无此数据或发生错误。响应: {result[:50]}...")
+                                    # 明确是查不到数据，不需要再试剩余 2 次，也不算系统异常
+                                    success_for_year = True  
+                                    break
                                 # 判断是否是合理的UUID查询字符串
                                 if not is_json_err and result and len(result) < 200 and "<html" not in result.lower():
                                     file_url = f"{download_url}?{result}"
-                                    dll_resp = session.get(file_url, timeout=600)
+                                    dll_resp = session.get(file_url, timeout=60) # 缩短大文件超时时间到60秒，避免无谓卡死
                                     content_size = len(dll_resp.content)
                                     
                                     if dll_resp.status_code == 200 and content_size > 1024:
@@ -209,7 +215,7 @@ def download_and_aggregate_tsm(
                     break
                     
             if not success_for_year:
-                log_callback(f"[-] 警告: 药物 {drug_name} 在年份 {current_year} 拉取失败！")
+                log_callback(f"[-] 警告: {drug_name} 在 {current_year} 拉取抛锚（可能服务器无响应）。跳过。")
 
     # 所有下载任务结束后，主动注销登录保护账号安全
     try:

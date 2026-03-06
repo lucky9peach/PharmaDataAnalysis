@@ -163,21 +163,50 @@ class FlexiblePivotWidget(QWidget):
             df = pd.read_excel(file_path)
             
             # --- 核心降维清洗：只保留多维分析关心的列并翻译成易读中文 ---
-            # 基于 core_config 我们嗅探原始列名
+            # 兼容：有时下载的是原始中文表头、有时可能是英文表头
             mapping_rules = {
                 '检索药名': 'API',
+                
+                # 地理
+                '国家': '国家/地区',
                 'market_region': '国家/地区',
+                
+                # 剂型类别
+                '剂型': '细分剂型',
                 'formulation': '细分剂型',
-                'NFC1': 'NFC1_分类', 
-                'NFC2': 'NFC2_分类',
+                'NFC1': '大类别',
+                
+                # 年份
+                '年份': '年份',
                 'year': '年份',
+                
+                # 销量与金额 (因为不同药下载列名带有空格和单位比如 "最小单包装销售数量 粒")
+                '最小单包装销售数量 粒': '销售数量(Unit)',
                 'sales_volume_units': '销售数量(Unit)',
+                
+                '销售额': '销售金额(USD)',
                 'sales_value_usd': '销售金额(USD)',
+                
+                '公斤': '原料药消耗量(KG)',
                 'volume_api_kg': '原料药消耗量(KG)'
             }
             
-            # 重命名列
-            df_renamed = df.rename(columns=mapping_rules)
+            # 使用 contains 模糊重命名因为列名经常带不同的单位后缀如 "最小单包装销售数量 支"
+            for orig_col in df.columns:
+                if '国家' in orig_col or orig_col == 'market_region':
+                    df.rename(columns={orig_col: '国家/地区'}, inplace=True)
+                elif '剂型' in orig_col or orig_col == 'formulation':
+                    df.rename(columns={orig_col: '细分剂型'}, inplace=True)
+                elif '单包装' in orig_col or orig_col == 'sales_volume_units':
+                    df.rename(columns={orig_col: '销售数量(Unit)'}, inplace=True)
+                elif orig_col == '销售额' or orig_col == 'sales_value_usd':
+                    df.rename(columns={orig_col: '销售金额(USD)'}, inplace=True)
+                elif '公斤' in orig_col or orig_col == 'volume_api_kg':
+                    df.rename(columns={orig_col: '原料药消耗量(KG)'}, inplace=True)
+                elif orig_col == '检索药名':
+                    df.rename(columns={orig_col: 'API'}, inplace=True)
+                    
+            df_renamed = df
             
             # 手工补齐如果缺失的列
             if 'API' not in df_renamed.columns:
