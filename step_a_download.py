@@ -4,6 +4,7 @@ import random
 import requests
 import pandas as pd
 from datetime import datetime
+import configparser
 
 def parse_years(time_string):
     """解析用户输入的时间段，支持如 '2022-2025' 或 '2022,2023'"""
@@ -28,8 +29,8 @@ def download_and_aggregate_tsm(
     drug_names,
     time_period,
     base_url="http://work.progames.top:3000",
-    username="YLWZGJ2022",
-    password="2026#ylwz",
+    username=None,
+    password=None,
     output_base_dir="TSM_Downloads",
     log_callback=print
 ):
@@ -68,6 +69,24 @@ def download_and_aggregate_tsm(
     output_dir = os.path.abspath(os.path.join(BASE_DIR, output_base_dir, "raw_files"))
     os.makedirs(output_dir, exist_ok=True)
     log_callback(f"[*] 已建/检查数据下载保存目录: {output_dir}")
+    
+    # 尝试从 config.ini 读取密码
+    if username is None or password is None:
+        config = configparser.ConfigParser()
+        config_path = os.path.join(BASE_DIR, "config.ini")
+        if os.path.exists(config_path):
+            try:
+                config.read(config_path, encoding='utf-8')
+                if 'Credentials' in config:
+                    username = username or config['Credentials'].get('username', '').strip()
+                    password = password or config['Credentials'].get('password', '').strip()
+            except Exception as e:
+                log_callback(f"[-] 读取 config.ini 失败: {e}")
+                
+        if not username or not password:
+            log_callback("[-] 未提供账号或密码，也未能在 config.ini 中找到有效配置。")
+            log_callback("[-] 请复制 config.example.ini 并重命名为 config.ini，填入您的账号密码。")
+            return False, ""
     
     session = requests.Session()
     session.headers.update({

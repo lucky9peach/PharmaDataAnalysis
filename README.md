@@ -32,6 +32,13 @@ venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
+### 4. 账号配置 (首次必做)
+为了保护数据安全，账号密码不会直接写在代码中。请复制模板文件配置您的账号：
+1. 在项目根目录下，找到 `config.example.ini`。
+2. 将其复制或重命名为 `config.ini`。
+3. 打开 `config.ini`，在其中填入您的 TSM 数据库下载账号和密码。
+> 注意：`config.ini` 已经被 `.gitignore` 忽略，绝对不会被上传到共有服务器。
+
 ## 使用说明
 
 运行项目的主入口是 `main.py`。该文件将引导启动整个图形用户界面（GUI），串联所有的分析步骤（自动下载 -> 数据清洗 -> 标准化 -> 可视化看板查看）。

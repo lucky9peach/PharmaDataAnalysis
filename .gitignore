@@ -11,6 +11,7 @@ env/
 .DS_Store
 
 # Project specific
+config.ini
 Cache/
 TSM_Downloads/
 *.xlsx
