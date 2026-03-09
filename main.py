@@ -302,6 +302,24 @@ class EuropeanAnalysisPage(QWidget):
         self.originator_combo.setMinimumWidth(250)
         self.originator_combo.lineEdit().setPlaceholderText("可手动选择/锁定原研企业...")
         
+        orig_row = QHBoxLayout()
+        orig_row.setContentsMargins(0, 0, 0, 0)
+        orig_row.addWidget(self.originator_combo)
+        
+        btn_all = QPushButton("全选")
+        btn_clear = QPushButton("清空")
+        btn_all.setFixedWidth(40)
+        btn_clear.setFixedWidth(40)
+        style = "QPushButton { padding: 4px; font-size: 11px; background-color: #cbd5e0; color: #2d3748; border-radius: 3px; font-weight: normal; } QPushButton:hover { background-color: #a0aec0; }"
+        btn_all.setStyleSheet(style)
+        btn_clear.setStyleSheet(style)
+        btn_all.clicked.connect(self.originator_combo.check_all)
+        btn_clear.clicked.connect(self.originator_combo.uncheck_all)
+        orig_row.addWidget(btn_all)
+        orig_row.addWidget(btn_clear)
+        orig_container = QWidget()
+        orig_container.setLayout(orig_row)
+        
         self.run_btn = QPushButton("▶ 执行深度预测")
         self.run_btn.setStyleSheet("background-color: #2b6cb0; color: white; padding: 6px 15px; border-radius: 4px; font-weight: bold;")
         self.run_btn.clicked.connect(self.run_analysis)
@@ -313,7 +331,7 @@ class EuropeanAnalysisPage(QWidget):
         top_bar.addWidget(QLabel("选择通用名 (API):"))
         top_bar.addWidget(self.api_combo)
         top_bar.addWidget(QLabel("标记原研(按单价从高到低):"))
-        top_bar.addWidget(self.originator_combo)
+        top_bar.addWidget(orig_container)
         top_bar.addWidget(self.run_btn)
         top_bar.addWidget(self.tips_label)
         top_bar.addStretch()
@@ -616,6 +634,27 @@ class MainWindow(QMainWindow):
         header_layout.addWidget(logo_label)
         header_layout.addSpacing(10)
         header_layout.addWidget(title_label)
+        
+        self.toggle_main_sidebar_btn = QPushButton("☰ 折叠/展开主菜单")
+        self.toggle_main_sidebar_btn.setStyleSheet("""
+            QPushButton {
+                background-color: transparent; 
+                color: #2b6cb0; 
+                font-weight: bold; 
+                font-size: 13px;
+                padding: 5px 10px;
+                border: 1px solid #cbd5e0;
+                border-radius: 4px;
+            }
+            QPushButton:hover {
+                background-color: #ebf8ff;
+            }
+        """)
+        self.toggle_main_sidebar_btn.setCursor(Qt.PointingHandCursor)
+        self.toggle_main_sidebar_btn.clicked.connect(self.toggle_main_sidebar)
+        header_layout.addSpacing(20)
+        header_layout.addWidget(self.toggle_main_sidebar_btn)
+        
         header_layout.addStretch()
         
         # Progress Indicator Text
@@ -630,9 +669,9 @@ class MainWindow(QMainWindow):
         main_layout.addLayout(body_layout)
         
         # Sidebar
-        sidebar = QFrame()
-        sidebar.setFixedWidth(240)
-        sidebar.setStyleSheet("""
+        self.main_sidebar = QFrame()
+        self.main_sidebar.setFixedWidth(240)
+        self.main_sidebar.setStyleSheet("""
             QFrame {
                 background-color: #ffffff;
                 border-right: 1px solid #e2e8f0;
@@ -659,7 +698,7 @@ class MainWindow(QMainWindow):
                 color: #cbd5e0;
             }
         """)
-        sidebar_layout = QVBoxLayout(sidebar)
+        sidebar_layout = QVBoxLayout(self.main_sidebar)
         sidebar_layout.setContentsMargins(0, 20, 0, 0)
         sidebar_layout.setAlignment(Qt.AlignTop)
         
@@ -680,7 +719,7 @@ class MainWindow(QMainWindow):
             self.nav_btns.append(btn)
             
         self.nav_btns[0].setChecked(True)
-        body_layout.addWidget(sidebar)
+        body_layout.addWidget(self.main_sidebar)
         
         # Stacked Widget
         self.stack = QStackedWidget()
@@ -700,6 +739,9 @@ class MainWindow(QMainWindow):
         self.stack.addWidget(self.page_pivot)
         self.stack.addWidget(self.page4)
         self.stack.addWidget(self.page5)
+
+    def toggle_main_sidebar(self):
+        self.main_sidebar.setVisible(not self.main_sidebar.isVisible())
         
         # 绑定流水线流转事件
         self.page1.completed_signal.connect(self.on_step1_done)
