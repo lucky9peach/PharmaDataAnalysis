@@ -221,12 +221,17 @@ class Step2Widget(BaseStepWidget):
     def execute(self):
         if not self.input_file_path:
             base_dir = os.path.dirname(os.path.abspath(__file__))
-            cache_file = os.path.join(base_dir, "Cache", "step1_latest.xlsx")
-            if os.path.exists(cache_file):
-                self.input_file_path = os.path.abspath(cache_file)
-                self.append_log("[*] 未捕获到直接下发流，检测到 Step 1 历史缓存，将直接使用...")
+            cache_file_csv = os.path.join(base_dir, "Cache", "step1_latest.csv")
+            cache_file_xlsx = os.path.join(base_dir, "Cache", "step1_latest.xlsx")
+            
+            if os.path.exists(cache_file_csv):
+                self.input_file_path = os.path.abspath(cache_file_csv)
+                self.append_log("[*] 未捕获到直接下发流，检测到 Step 1 历史缓存 (CSV)，将直接使用...")
+            elif os.path.exists(cache_file_xlsx):
+                self.input_file_path = os.path.abspath(cache_file_xlsx)
+                self.append_log("[*] 未捕获到直接下发流，检测到 Step 1 历史缓存 (Excel)，将直接使用...")
             else:
-                self.append_log("[-] 错误：没有检测到有效的输入文件，且无本地缓存(Cache/step1_latest.xlsx)，请先执行 Step 1！")
+                self.append_log("[-] 错误：没有检测到有效的输入文件，且无本地历史缓存 (Cache/step1_latest.csv 或 .xlsx)，请先执行 Step 1！")
                 return
             
         self.run_btn.setEnabled(False)

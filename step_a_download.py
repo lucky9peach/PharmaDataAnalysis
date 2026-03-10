@@ -5,6 +5,7 @@ import requests
 import pandas as pd
 from datetime import datetime
 import configparser
+import json
 
 def parse_years(time_string):
     """解析用户输入的时间段，支持如 '2022-2025' 或 '2022,2023'"""
@@ -50,10 +51,32 @@ def download_and_aggregate_tsm(
     """
     
     if isinstance(drug_names, str):
-        drug_names = [d.strip().upper() for d in drug_names.split() if d.strip()]
+        # 将各种标点符号（中英文逗号、分号）替换为空格
+        for char in [',', ';', '，', '；']:
+            drug_names = drug_names.replace(char, ' ')
+        raw_names = [d.strip().upper() for d in drug_names.split() if d.strip()]
     else:
-        drug_names = [d.strip().upper() for d in drug_names if str(d).strip()]
+        raw_names = [d.strip().upper() for d in drug_names if str(d).strip()]
         
+    # 常用化学盐基/后缀黑名单，防止切词后变成独立药物进行无意义的查询
+    ignore_suffixes = {
+        'SODIUM', 'HYDROCHLORIDE', 'POTASSIUM', 'CALCIUM', 'SULFATE', 
+        'PHOSPHATE', 'MESYLATE', 'MALEATE', 'ACETATE', 'CHLORIDE',
+        'BROMIDE', 'NITRATE', 'CITRATE', 'TARTRATE', 'SUCCINATE',
+        'FUMARATE', 'LACTATE', 'MALATE', 'TOSYLATE', 'BESYLATE',
+        'SALICYLATE', 'ASCORBATE', 'CARBONATE', 'HYDROXIDE', 'OXIDE',
+        'PEROXIDE', 'SULFIDE', 'FLUORIDE', 'IODIDE', 'SULPHATE',
+        'DIPROPIΟNATE', 'VALERATE', 'BUTYRATE', 'PROPIONATE', 'CAPROATE',
+        'ENANTHATE', 'CYPIONATE', 'DECANOATE', 'UNDECANOATE', 'LAURATE',
+        'PALMITATE', 'STEARATE', 'OLEATE', 'LINOLEATE', 'LINOLENATE',
+        'ARACHIDONATE', 'PAMOATE', 'NAPADISILATE', 'ESTOLATE', 'ALPHACALCIDOL'
+    }
+    
+    drug_names = []
+    for name in raw_names:
+        if name not in ignore_suffixes and len(name) > 2: # 过滤掉黑名单词和极短的无意义字母
+            drug_names.append(name)
+            
     years_to_fetch = parse_years(time_period)
     
     if not drug_names:
@@ -155,7 +178,6 @@ def download_and_aggregate_tsm(
                             resp = session.post(download2_url, data=payload, timeout=240)
                             if resp.status_code == 200:
                                 result = resp.text.strip()
-                                import json
                                 is_json_err = False
                                 try:
                                     jdata = json.loads(result)
@@ -171,51 +193,62 @@ def download_and_aggregate_tsm(
                                 # 判断是否是合理的UUID查询字符串
                                 if not is_json_err and result and len(result) < 200 and "<html" not in result.lower():
                                     file_url = f"{download_url}?{result}"
-                                    dll_resp = session.get(file_url, timeout=60) # 缩短大文件超时时间到60秒，避免无谓卡死
-                                    content_size = len(dll_resp.content)
-                                    
-                                    if dll_resp.status_code == 200 and content_size > 1024:
-                                        filename = f"TSM_{current_year}_{drug_name}_{ep}.xlsx"
-                                        filepath = os.path.join(output_dir, filename)
-                                        with open(filepath, "wb") as f:
-                                            f.write(dll_resp.content)
-                                            
-                                        log_callback(f"[+++] {current_year} {drug_name} 成功拉取! 保存至 {filename} ({content_size} byte)")
-                                        success_for_year = True
-                                        # 随机休眠 1-2 秒，保护账号防封号
-                                        sleep_t = random.uniform(1, 2)
-                                        log_callback(f"[*] 礼貌性等待 {sleep_t:.1f} 秒...")
-                                        time.sleep(sleep_t)
+                                    try:
+                                        dll_resp = session.get(file_url, timeout=180) # 大文件增加超时时间到180秒，避免下载几十兆单年记录时无谓卡死
+                                        content_size = len(dll_resp.content)
                                         
-                                        # 读取原始数据进行合并（暂不做业务清洗，仅堆叠以备后续模块处理）
-                                        try:
-                                            tmp_df = pd.read_excel(filepath)
-                                            if tmp_df.empty:
-                                                log_callback(f"    [-] 表格为空，跳过合并。")
-                                                break
-                                            
-                                            if '检索药名' not in tmp_df.columns:
-                                                tmp_df['检索药名'] = drug_name
+                                        if dll_resp.status_code == 200 and content_size > 1024:
+                                            filename = f"TSM_{current_year}_{drug_name}_{ep}.xlsx"
+                                            filepath = os.path.join(output_dir, filename)
+                                            with open(filepath, "wb") as f:
+                                                f.write(dll_resp.content)
                                                 
-                                            all_dfs.append(tmp_df)
-                                            log_callback(f"    [+] 成功读取 {len(tmp_df)} 行原始数据准备合并。")
+                                            log_callback(f"[+++] {current_year} {drug_name} 成功拉取! 保存至 {filename} ({content_size} byte)")
+                                            success_for_year = True
+                                            # 随机休眠 1-2 秒，保护账号防封号
+                                            sleep_t = random.uniform(1, 2)
+                                            log_callback(f"[*] 礼貌性等待 {sleep_t:.1f} 秒...")
+                                            time.sleep(sleep_t)
                                             
-                                        except Exception as e:
-                                            log_callback(f"    [-] 读取/处理 {filename} 失败: {e}")
-                                            
-                                        break
-                                    else:
-                                        log_callback(f"    [-] 文件异常/过小 ({content_size} bytes)")
+                                            # 读取原始数据进行合并（暂不做业务清洗，仅堆叠以备后续模块处理）
+                                            try:
+                                                tmp_df = pd.read_excel(filepath)
+                                                if tmp_df.empty:
+                                                    log_callback(f"    [-] 表格为空，跳过合并。")
+                                                    break
+                                                
+                                                if '检索药名' not in tmp_df.columns:
+                                                    tmp_df['检索药名'] = drug_name
+                                                    
+                                                all_dfs.append(tmp_df)
+                                                log_callback(f"    [+] 成功读取 {len(tmp_df)} 行原始数据准备合并。")
+                                                
+                                            except Exception as e:
+                                                log_callback(f"    [-] 读取/处理 {filename} 失败: {e}")
+                                                
+                                            break
+                                        else:
+                                            log_callback(f"    [-] 文件异常/过小 ({content_size} bytes)")
+                                    except requests.exceptions.Timeout:
+                                        log_callback(f"    [-] 下载文件时超时 (超过 180 秒)，可能文件过大或者网络中断。")
+                                    except Exception as e:
+                                        log_callback(f"    [-] 下载文件时发生异常: {e}")
+                        except requests.exceptions.Timeout:
+                            log_callback(f"    [-] 请求查询时超时 (超过 240 秒)。")
                         except Exception as e:
-                            log_callback(f"    [-] 请求异常: {e}")
+                            log_callback(f"    [-] 请求查询异常: {e}")
                             
+                        # 如果是最后一次尝试依然失败，稍作休息
+                        if attempt == 3 and not success_for_year:
+                             log_callback(f"    [-] 已达到最大尝试次数，跳过当前查询项。")
+                             
                     if success_for_year:
                         break
                 if success_for_year:
                     break
                     
             if not success_for_year:
-                log_callback(f"[-] 警告: {drug_name} 在 {current_year} 拉取抛锚（可能服务器无响应）。跳过。")
+                log_callback(f"[-] 警告: {drug_name} 在 {current_year} 拉取全部失败。已自动跳过，继续执行后续队列。")
 
     # 所有下载任务结束后，主动注销登录保护账号安全
     try:
@@ -238,14 +271,15 @@ def download_and_aggregate_tsm(
         # 固定缓存文件位置以供 Step 2 拾取，挂载到绝对路径
         cache_dir = os.path.join(BASE_DIR, "Cache")
         os.makedirs(cache_dir, exist_ok=True)
-        merged_filepath = os.path.abspath(os.path.join(cache_dir, "step1_latest.xlsx"))
+        merged_filepath = os.path.abspath(os.path.join(cache_dir, "step1_latest.csv"))
         
-        merged_df.to_excel(merged_filepath, index=False)
-        log_callback(f"[+++] 聚合 Excel 已保存至统一缓存路口: {merged_filepath} (共 {len(merged_df)} 行)")
+        # 使用 utf-8-sig 编码，使得Excel打开时不会中文乱码
+        merged_df.to_csv(merged_filepath, encoding='utf-8-sig', index=False)
+        log_callback(f"[+++] 聚合文件已保存至统一缓存路口: {merged_filepath} (共 {len(merged_df)} 行)")
         return True, merged_filepath
         
     except Exception as e:
-        log_callback(f"[-] 保存聚合 Excel 失败: {e}")
+        log_callback(f"[-] 保存聚合 CSV 失败: {e}\n(可能是内容过大或其他问题)")
         return False, ""
 
 # 独立运行测试代码

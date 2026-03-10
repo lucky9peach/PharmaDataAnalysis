@@ -23,8 +23,11 @@ def clean_and_cache_data(input_excel_path, output_parquet_dir="Cache", log_callb
         
     log_callback(f"[*] 解析并清洗数据: {os.path.basename(input_excel_path)}")
     try:
-        # 使用 openpyxl 读取避免告警
-        df = pd.read_excel(input_excel_path)
+        if input_excel_path.lower().endswith('.csv'):
+            df = pd.read_csv(input_excel_path, encoding='utf-8-sig', low_memory=False)
+        else:
+            # 使用 openpyxl 读取避免告警
+            df = pd.read_excel(input_excel_path)
     except Exception as e:
         log_callback(f"[-] 读取 Excel 失败: {e}")
         return False, ""

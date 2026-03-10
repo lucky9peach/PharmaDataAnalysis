@@ -155,10 +155,17 @@ class FlexiblePivotWidget(QWidget):
 
     def load_data(self):
         base_dir = os.path.dirname(os.path.abspath(__file__))
-        file_path = os.path.join(base_dir, "Cache", "step1_latest.xlsx")
+        file_path_csv = os.path.join(base_dir, "Cache", "step1_latest.csv")
+        file_path_xlsx = os.path.join(base_dir, "Cache", "step1_latest.xlsx")
         
-        if not os.path.exists(file_path):
-            QMessageBox.critical(self, "错误", f"找不到数据源文件 (需要先完成 Step 1 下载):\n{file_path}")
+        file_path = ""
+        if os.path.exists(file_path_csv):
+            file_path = file_path_csv
+        elif os.path.exists(file_path_xlsx):
+            file_path = file_path_xlsx
+            
+        if not file_path:
+            QMessageBox.critical(self, "错误", f"找不到数据源文件 (需要先完成 Step 1 下载):\nCache/step1_latest.csv")
             return
             
         try:
@@ -166,7 +173,10 @@ class FlexiblePivotWidget(QWidget):
             from PySide6.QtCore import Qt
             QApplication.setOverrideCursor(Qt.WaitCursor)
             
-            df = pd.read_excel(file_path)
+            if file_path.endswith('.csv'):
+                df = pd.read_csv(file_path, encoding='utf-8-sig', low_memory=False)
+            else:
+                df = pd.read_excel(file_path)
             
             # --- 核心降维清洗：只保留多维分析关心的列并翻译成易读中文 ---
             # 兼容：有时下载的是原始中文表头、有时可能是英文表头
