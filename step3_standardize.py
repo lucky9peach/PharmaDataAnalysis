@@ -119,10 +119,7 @@ class StandardizationEngine:
         total_apis = len(unique_apis)
         log(f"[*] 侦测到 {total_apis} 个独立 API，开始计算衍生指标与分片写出...")
         
-        # 清空旧缓存防止残留
-        import shutil
-        if os.path.exists(self.output_dir):
-            shutil.rmtree(self.output_dir, ignore_errors=True)
+        # 保留旧缓存防止误删已跳过的药物分析结果
         os.makedirs(self.output_dir, exist_ok=True)
         
         # 开始循环处理每个 API

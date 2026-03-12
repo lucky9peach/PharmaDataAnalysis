@@ -326,7 +326,6 @@ class FilterSidebar(QWidget):
         self.dosage_combo = CheckableComboBox()
         self.pack_combo = CheckableComboBox()
         self.corporation_combo = CheckableComboBox()
-        self.originator_combo = CheckableComboBox()
         
         def add_combo_row(label_text, combo_widget):
             self.layout.addWidget(QLabel(label_text))
@@ -371,7 +370,6 @@ class FilterSidebar(QWidget):
         add_combo_row("厂家企业 (Corporation)", self.corporation_combo)
         add_combo_row("细分剂型 (Dosage Form)", self.dosage_combo)
         add_combo_row("包装规格 (Pack Size)", self.pack_combo)
-        add_combo_row("原研药企业 (Originator, 可不选)", self.originator_combo)
         
         # 触发按钮
         self.apply_btn = QPushButton("▶ 应用全局筛选")
@@ -420,7 +418,6 @@ class FilterSidebar(QWidget):
             "dosage_form": self.dosage_combo.get_checked_items(),
             "pack_size": self.pack_combo.get_checked_items(),
             "corporation_name": self.corporation_combo.get_checked_items(),
-            "originator_companies": self.originator_combo.get_checked_items(),
         }
         self.filter_changed.emit(filters)
 
@@ -682,8 +679,20 @@ class TrendAnalysisCard(AnalysisCard):
         
         ax2 = ax1.twinx()
         metric_label = '总销售额' if self.metric_col == 'sales_value_usd' else '总销量'
-        line1 = ax1.plot(trend_data['year'], trend_data[self.metric_col], marker='o', color='#2c5282', linewidth=2, label=metric_label)
-        line2 = ax2.plot(trend_data['year'], trend_data['factory_price_est'], marker='s', color='#718096', linewidth=2, linestyle='--', label='均价')
+        
+        # 拆分≤ 2024 和 2025 数据
+        td_main = trend_data[trend_data['year'] <= 2024]
+        td_2025 = trend_data[trend_data['year'] >= 2024]  # 从2024开始以连接线段
+        
+        line1 = ax1.plot(td_main['year'], td_main[self.metric_col], marker='o', color='#2c5282', linewidth=2, label=metric_label)
+        line2 = ax2.plot(td_main['year'], td_main['factory_price_est'], marker='s', color='#718096', linewidth=2, linestyle='--', label='均价')
+        
+        # 2025年数据用虚线显示
+        if len(td_2025) >= 2:
+            ax1.plot(td_2025['year'], td_2025[self.metric_col], marker='o', color='#2c5282', linewidth=2, linestyle=':', alpha=0.5)
+            ax2.plot(td_2025['year'], td_2025['factory_price_est'], marker='s', color='#718096', linewidth=2, linestyle=':', alpha=0.5)
+            ax1.axvline(x=2025, color='#e53e3e', linestyle=':', alpha=0.4)
+            ax1.text(2025, ax1.get_ylim()[1]*0.95, '⚠️数据不完整', fontsize=8, color='#e53e3e', ha='center', va='top')
         
         ax1.set_xlabel("统计年份", color='#4a5568')
         y_label = "总销售额 (USD)" if self.metric_col == 'sales_value_usd' else "总销量 (Units)"
@@ -702,7 +711,9 @@ class TrendAnalysisCard(AnalysisCard):
         @cursor.connect("add")
         def on_add(sel):
             val_type = metric_label if sel.artist == line1[0] else "均价"
-            sel.annotation.set_text(f"年份: {sel.target[0]:.0f}\n{val_type}: {sel.target[1]:,.2f}")
+            yr = sel.target[0]
+            note = " (不完整)" if yr >= 2025 else ""
+            sel.annotation.set_text(f"年份: {yr:.0f}{note}\n{val_type}: {sel.target[1]:,.2f}")
             sel.annotation.get_bbox_patch().set(fc="white", alpha=0.9, ec="#cbd5e0")
             
         self.figure.tight_layout()
@@ -907,17 +918,51 @@ class CompetitiveLandscapeCard(AnalysisCard):
 class USAPIConsumptionCard(AnalysisCard):
     def __init__(self, parent=None):
         super().__init__(
-            title="美国API占比全球API消耗", 
+            title="指定国家API占比全球API消耗", 
             source="API_KG（公斤）用量聚合",
-            meth="不随其他筛选条件变化，提取所选API的（美国API公斤数/全球API公斤数）",
-            purpose="直白体现美国市场占全球的消费比重",
+            meth="不随其他筛选条件变化，提取所选API的（指定国家API公斤数/全球API公斤数）",
+            purpose="直白体现指定国家市场占全球的消费比重",
             parent=parent
         )
         self.value_toggle.hide()
         self.full_df = pd.DataFrame()
+        
+        # 国家选择下拉框
+        self.country_combo = QComboBox()
+        self.country_combo.setMinimumWidth(180)
+        self.country_combo.setStyleSheet("QComboBox { padding: 4px; font-size: 11px; }")
+        # 插入到标题行
+        self.layout.itemAt(0).layout().insertWidget(1, QLabel("选择国家:"))
+        self.layout.itemAt(0).layout().insertWidget(2, self.country_combo)
+        self.country_combo.currentTextChanged.connect(self._on_country_changed)
+        self._selected_country = "UNITED STATES"
+
+    def _on_country_changed(self, text):
+        self._selected_country = text
+        if not self.last_df.empty:
+            self.generate_chart(self.last_df, self.last_filters)
 
     def set_full_df(self, df: pd.DataFrame):
         self.full_df = df
+        # 填充国家列表
+        if not df.empty and 'market_region' in df.columns:
+            countries = sorted(df['market_region'].dropna().unique().tolist())
+            self.country_combo.blockSignals(True)
+            self.country_combo.clear()
+            for c in countries:
+                self.country_combo.addItem(str(c))
+            # 默认选中 UNITED STATES
+            us_idx = self.country_combo.findText("UNITED STATES")
+            if us_idx >= 0:
+                self.country_combo.setCurrentIndex(us_idx)
+            else:
+                # 尝试模糊匹配
+                for i in range(self.country_combo.count()):
+                    if 'US' in self.country_combo.itemText(i).upper():
+                        self.country_combo.setCurrentIndex(i)
+                        break
+            self._selected_country = self.country_combo.currentText()
+            self.country_combo.blockSignals(False)
 
     def generate_chart(self, df: pd.DataFrame, filters: dict):
         self.last_df = df
@@ -937,9 +982,10 @@ class USAPIConsumptionCard(AnalysisCard):
             ax.text(0.5, 0.5, "无足够公斤数据(api_kg)", ha='center', va='center', color='#7f8c8d')
             self.canvas.draw()
             return
-            
-        us_mask = plot_df["market_region"].str.contains("美国|US|USA|UNITED STATES", case=False, na=False)
-        us_kg = plot_df[us_mask]['api_kg'].sum()
+        
+        country = self._selected_country or "UNITED STATES"
+        country_mask = plot_df["market_region"].str.upper().str.strip() == country.upper().strip()
+        country_kg = plot_df[country_mask]['api_kg'].sum()
         total_kg = plot_df['api_kg'].sum()
         
         if total_kg <= 0:
@@ -947,17 +993,17 @@ class USAPIConsumptionCard(AnalysisCard):
             self.canvas.draw()
             return
             
-        other_kg = total_kg - us_kg
+        other_kg = total_kg - country_kg
         
         wedges, texts, autotexts = ax.pie(
-            [us_kg, other_kg], labels=["美国", "全球其他区域"], 
+            [country_kg, other_kg], labels=[country, "全球其他区域"], 
             autopct=lambda p: f'{p:1.1f}%\n({p/100.*total_kg:,.0f} kg)', 
             colors=['#e53e3e', '#2b6cb0'], startangle=90, wedgeprops={'linewidth': 1, 'edgecolor': 'white'}
         )
         for t in texts: t.set_fontsize(12)
         for at in autotexts: at.set_color('white'); at.set_fontsize(12)
             
-        ax.set_title("美国整体占比 (按API消耗公斤数)", fontsize=12, color='#1a365d')
+        ax.set_title(f"{country} 整体占比 (按API消耗公斤数)", fontsize=12, color='#1a365d')
         ax.axis('equal')
         self.figure.tight_layout()
         self.canvas.draw()
@@ -1025,19 +1071,7 @@ class CountryMarketSharePieCard(AnalysisCard):
             self.exclude_combo.updateText()
             self.exclude_combo.blockSignals(False)
 
-            # 如果侧边栏已配置原研药，自动帮勾上「排除所有原研药」
-            if filters.get('originator_companies'):
-                m = self.exclude_combo.source_model
-                if m.item(0):
-                    m.item(0).setCheckState(Qt.Checked)
-                self.exclude_combo.updateText()
-
         plot_df = df.copy()
-
-        # 1) 侧边栏原研药排除（originator_companies）
-        orig_companies = filters.get('originator_companies', [])
-        if orig_companies:
-            plot_df = plot_df[~plot_df['corporation_name'].isin(orig_companies)]
 
         # 2) 卡片内部排除 combo
         exclude_corps = self.exclude_combo.get_checked_items()
@@ -1150,8 +1184,8 @@ class CountryMarketSharePieCard(AnalysisCard):
 
 class SKUShareCard(AnalysisCard):
     def __init__(self, parent=None):
-        super().__init__("核心 SKU 分布 (前五大企业占比)", parent=parent)
-        self.meth = "抽取销量Top5的制药企业，分别抓取各家销量最高的Top5核心规格剂型，展示其相对结构分布"
+        super().__init__("核心 SKU 分布 (前三大企业)", parent=parent)
+        self.meth = "抽取销量Top3的制药企业，分别抓取各家销量最高的Top5核心规格剂型，展示其占比和销量"
 
     def generate_chart(self, df: pd.DataFrame, filters: dict):
         self.last_df = df
@@ -1164,21 +1198,27 @@ class SKUShareCard(AnalysisCard):
             self.canvas.draw()
             return
 
-        top5_corps = df.groupby('corporation_name')[self.metric_col].sum().nlargest(5).index
-        if len(top5_corps) == 0:
+        top3_corps = df.groupby('corporation_name')[self.metric_col].sum().nlargest(3).index
+        if len(top3_corps) == 0:
             ax.text(0.5, 0.5, "无足够销量数据", ha='center', va='center', color='#7f8c8d')
             self.canvas.draw()
             return
             
-        plot_df = df[df['corporation_name'].isin(top5_corps)]
+        plot_df = df[df['corporation_name'].isin(top3_corps)]
         sku_grouped = plot_df.groupby(['corporation_name', 'strength_raw'])[self.metric_col].sum().reset_index()
         
         ax.invert_yaxis()
-        y_pos = np.arange(len(top5_corps))
-        bottom = np.zeros(len(top5_corps))
+        y_pos = np.arange(len(top3_corps))
+        bottom = np.zeros(len(top3_corps))
         cmap = cm.get_cmap('tab20', 20)
         
-        for i, corp in enumerate(top5_corps):
+        # 预计算每个企业的总量，用于百分比
+        corp_totals = {}
+        for i, corp in enumerate(top3_corps):
+            corp_data = sku_grouped[sku_grouped['corporation_name'] == corp]
+            corp_totals[corp] = corp_data[self.metric_col].sum()
+        
+        for i, corp in enumerate(top3_corps):
             corp_data = sku_grouped[sku_grouped['corporation_name'] == corp]
             top_skus = corp_data.nlargest(5, self.metric_col)
             rest = corp_data[~corp_data['strength_raw'].isin(top_skus['strength_raw'])]
@@ -1188,24 +1228,28 @@ class SKUShareCard(AnalysisCard):
                 top_skus = pd.concat([top_skus, pd.DataFrame({'corporation_name': [corp], 'strength_raw': ['其他/Other'], self.metric_col: [rest_sum]})])
 
             top_skus = top_skus.sort_values(by=self.metric_col, ascending=False)
+            corp_total = corp_totals[corp]
             
             for j, (_, row) in enumerate(top_skus.iterrows()):
                 sku = str(row['strength_raw'])
                 val = row[self.metric_col]
-                short_sku = (sku[:15] + '..') if len(sku) > 15 else sku
+                pct = (val / corp_total * 100) if corp_total > 0 else 0
                 
                 bar = ax.barh(i, val, left=bottom[i], height=0.6, color=cmap(j), edgecolor='white', alpha=0.9)
                 bottom[i] += val
                 
-                if val > (bottom[i] * 0.05):
+                # 显示完整mg + 占比 + 销量
+                if val > (bottom[i] * 0.03):
                     cx = bottom[i] - (val / 2)
-                    ax.text(cx, i, short_sku, ha='center', va='center', color='#2d3748', fontsize=7, rotation=0)
+                    label_text = f"{sku}\n{pct:.1f}% | {val:,.0f}"
+                    ax.text(cx, i, label_text, ha='center', va='center', color='#2d3748', fontsize=6.5, rotation=0,
+                            bbox=dict(boxstyle='round,pad=0.15', facecolor='white', alpha=0.7, edgecolor='none'))
 
         ax.set_yticks(y_pos)
-        ax.set_yticklabels([str(c) for c in top5_corps], color='#2d3748')
+        ax.set_yticklabels([str(c) for c in top3_corps], color='#2d3748')
         x_label = "销售额 (USD)" if self.metric_col == 'sales_value_usd' else "销量 (Units)"
         ax.set_xlabel(x_label, color='#4a5568')
-        ax.set_title("Top5 企业核心规格型号分布", fontsize=11, color='#1a365d')
+        ax.set_title("Top3 企业核心规格型号分布 (规格 | 占比 | 销量)", fontsize=11, color='#1a365d')
         
         ax.spines['top'].set_visible(False)
         ax.spines['right'].set_visible(False)
@@ -1241,10 +1285,10 @@ class MarketAttractivenessMatrixCard(AnalysisCard):
             self.canvas.draw()
             return
             
-        # 计算每个 API 的最早和最晚年份的销量
+        # 计算每个 API 的最早和最晚年份的销量（排除2025年不完整数据）
         api_stats = []
         for api, grp in df.groupby('api_name'):
-            years = sorted(grp['year'].unique())
+            years = sorted([y for y in grp['year'].unique() if y <= 2024])  # 排除2025
             if len(years) >= 2:
                 v_start = grp[grp['year'] == years[0]][self.metric_col].sum()
                 v_end = grp[grp['year'] == years[-1]][self.metric_col].sum()
@@ -1329,7 +1373,7 @@ class TopGrowthAPIsCard(AnalysisCard):
             threshold = 1000 if self.metric_col == 'sales_volume_units' else 10000
             if total_vol < threshold: continue
                 
-            years = sorted(grp['year'].unique())
+            years = sorted([y for y in grp['year'].unique() if y <= 2024])  # 排除2025
             if len(years) >= 2:
                 v_start = grp[grp['year'] == years[0]][self.metric_col].sum()
                 v_end = grp[grp['year'] == years[-1]][self.metric_col].sum()
@@ -1398,7 +1442,12 @@ class PriceErosionTrendsCard(AnalysisCard):
                 base_price = grp['factory_price_est'].iloc[0]
                 if base_price > 0:
                     grp['norm_price'] = (grp['factory_price_est'] / base_price) * 100
-                    line, = ax.plot(grp['year'], grp['norm_price'], marker='.', linewidth=2, color=cmap(i), label=(api[:10]+'..'))
+                    # 拆分主体和2025
+                    grp_main = grp[grp['year'] <= 2024]
+                    grp_2025 = grp[grp['year'] >= 2024]
+                    line, = ax.plot(grp_main['year'], grp_main['norm_price'], marker='.', linewidth=2, color=cmap(i), label=(api[:10]+'..'))
+                    if len(grp_2025) >= 2:
+                        ax.plot(grp_2025['year'], grp_2025['norm_price'], marker='.', linewidth=2, color=cmap(i), linestyle=':', alpha=0.5)
                     lines_info.append(line)
         
         if not lines_info:
@@ -1587,7 +1636,19 @@ class SingleAPICorpShareCard(AnalysisCard):
             self.canvas.draw()
             return
 
-        plot_df = plot_df[plot_df['corporation_name'].isin(top_corps)]
+        plot_df = plot_df[plot_df['corporation_name'].isin(top_corps)].copy()
+        
+        # 合并剂型: 所有胶囊类 → 胶囊, 所有片剂类 → 片剂
+        def normalize_dosage_form(form):
+            form_upper = str(form).upper()
+            if 'CAPSULE' in form_upper or '胶囊' in form_upper:
+                return '胶囊 (Capsule)'
+            elif 'TABLET' in form_upper or '片' in form_upper:
+                return '片剂 (Tablet)'
+            else:
+                return str(form)
+        
+        plot_df['dosage_form'] = plot_df['dosage_form'].apply(normalize_dosage_form)
         
         pivot = plot_df.pivot_table(index='corporation_name', columns='dosage_form', values='sales_volume_units', aggfunc='sum', fill_value=0)
         pivot['Total'] = pivot.sum(axis=1)
@@ -1738,61 +1799,39 @@ class Step4DashboardWidget(QWidget):
         self.charts_layout.setSpacing(20)
         self.charts_layout.setContentsMargins(0, 0, 0, 0)
         
-        # 初始化上述 四 个分析卡片
-        self.card_tier = GlobalStrategicTierCard()
+        # 初始化分析卡片（已移除: 全球战略梯队, 单竞争产品生命周期纵深研判, 市场竞争格局与集中度, 区域市场份额分布）
         self.card_trend = TrendAnalysisCard()
         self.card_comparison = ProductComparisonCard()
-        self.card_single_trend = SingleProductTrendCard()
-        
-        # 新增卡片
-        self.card_hhi = CompetitiveLandscapeCard()
-        self.card_hhi.source = "全量企业市场销量份额"
-        self.card_hhi.meth = "计算各企业销量占比百分比平方和生成 HHI 指数"
-        self.card_hhi.purpose = "评估市场是被寡头垄断，还是处于高度分散竞争"
 
         self.card_us_consumption = USAPIConsumptionCard()
 
-        self.card_distributor = CountryMarketSharePieCard()
-        self.card_distributor.source = "由左侧指定的各个国家内竞争格局明细数据"
-        self.card_distributor.meth = "提取企业在当地的总销量展示分布，同时可以通过手动下拉框排除任何一家厂商（如原研企业）以重新平摊数据"
-        self.card_distributor.purpose = "当剔除核心垄断竞品时评估市场的切入空间及剩余对手分布情况"
-
         self.card_sku = SKUShareCard()
         self.card_sku.source = "统一规格解析层级的明细"
-        self.card_sku.meth = "提取头部选手Top 5核心规格型号的绝对销量依赖面"
+        self.card_sku.meth = "提取头部选手Top 3核心规格型号的绝对销量依赖面"
         self.card_sku.purpose = "为跟进提供研发依据，避免仿制无人问津的冷门边缘规格"
         
-        # 布局排列
-        self.charts_layout.addWidget(self.card_tier, 0, 0)
-        self.charts_layout.addWidget(self.card_trend, 0, 1)
-        
-        self.charts_layout.addWidget(self.card_comparison, 1, 0)
-        self.charts_layout.addWidget(self.card_single_trend, 1, 1)
-
-        self.charts_layout.addWidget(self.card_hhi, 2, 0)
-        self.charts_layout.addWidget(self.card_us_consumption, 2, 1)
-
-        self.charts_layout.addWidget(self.card_distributor, 3, 0)
-        self.charts_layout.addWidget(self.card_sku, 3, 1)
-
         self.card_attr = MarketAttractivenessMatrixCard()
         self.card_top_growth = TopGrowthAPIsCard()
         self.card_erosion = PriceErosionTrendsCard()
-        self.card_regional = MarketRegionalDistributionCard()
         self.card_hhi_cross = HHICrossAPIComparisonCard()
         
         self.card_single_form = SingleAPICorpShareCard()
         self.card_multi_api = MultiAPICorpPresenceCard()
         
-        self.charts_layout.addWidget(self.card_attr, 4, 0)
-        self.charts_layout.addWidget(self.card_top_growth, 4, 1)
-        self.charts_layout.addWidget(self.card_erosion, 5, 0)
-        self.charts_layout.addWidget(self.card_regional, 5, 1)
-        self.charts_layout.addWidget(self.card_hhi_cross, 6, 0, 1, 2)
+        # 布局排列 (2列紧凑排列)
+        self.charts_layout.addWidget(self.card_trend, 0, 0)
+        self.charts_layout.addWidget(self.card_comparison, 0, 1)
+
+        self.charts_layout.addWidget(self.card_us_consumption, 1, 0)
+        self.charts_layout.addWidget(self.card_sku, 1, 1)
+
+        self.charts_layout.addWidget(self.card_attr, 2, 0)
+        self.charts_layout.addWidget(self.card_top_growth, 2, 1)
+        self.charts_layout.addWidget(self.card_erosion, 3, 0)
+        self.charts_layout.addWidget(self.card_hhi_cross, 3, 1)
         
-        # Add the two new charts side-by-side
-        self.charts_layout.addWidget(self.card_single_form, 7, 0)
-        self.charts_layout.addWidget(self.card_multi_api, 7, 1)
+        self.charts_layout.addWidget(self.card_single_form, 4, 0)
+        self.charts_layout.addWidget(self.card_multi_api, 4, 1)
         
         self.scroll_area.setWidget(self.charts_container)
         self.right_layout.addWidget(self.scroll_area)
@@ -1854,19 +1893,6 @@ class Step4DashboardWidget(QWidget):
                 for p in packs:
                     self.sidebar.pack_combo.addCheckableItem(str(p))
 
-            # 4) 原研药企业几个候选（基于 ORIGINATOR_CONFIG 与实际数据进行执行级过滤）
-            self.sidebar.originator_combo.clear()
-            if 'api_name' in self.current_data.columns and 'corporation_name' in self.current_data.columns:
-                avail_corps = self.current_data['corporation_name'].dropna().unique().tolist()
-                detected_origs = set()
-                for api, kws in core_config.ORIGINATOR_CONFIG.items():
-                    for corp in avail_corps:
-                        for kw in kws:
-                            if kw.upper() in str(corp).upper():
-                                detected_origs.add(corp)
-                for orig in sorted(detected_origs):
-                    self.sidebar.originator_combo.addCheckableItem(orig)
-
     def on_filter_changed(self, filters: dict):
         """中继器处理：拦截 Filter 参数，下发给各个图表系统"""
         if self.current_data.empty:
@@ -1907,19 +1933,14 @@ class Step4DashboardWidget(QWidget):
         if dosage_list and "dosage_form" in filtered_df.columns:
             filtered_df = filtered_df[filtered_df["dosage_form"].isin(dosage_list)]
 
-        # 同步重绘所有子分析卡片
-        self.card_tier.generate_chart(filtered_df, filters)
+        # 同步重绘所有子分析卡片（已移除: card_tier, card_single_trend, card_hhi, card_distributor, card_regional）
         self.card_trend.generate_chart(filtered_df, filters)
         self.card_comparison.generate_chart(filtered_df, filters)
-        self.card_single_trend.generate_chart(filtered_df, filters)
-        self.card_hhi.generate_chart(filtered_df, filters)
         self.card_us_consumption.generate_chart(filtered_df, filters)
-        self.card_distributor.generate_chart(filtered_df, filters)
         self.card_sku.generate_chart(filtered_df, filters)
         self.card_attr.generate_chart(filtered_df, filters)
         self.card_top_growth.generate_chart(filtered_df, filters)
         self.card_erosion.generate_chart(filtered_df, filters)
-        self.card_regional.generate_chart(filtered_df, filters)
         self.card_hhi_cross.generate_chart(filtered_df, filters)
         self.card_single_form.generate_chart(filtered_df, filters)
         self.card_multi_api.generate_chart(filtered_df, filters)
@@ -2149,8 +2170,25 @@ class AnalysisEngineV24:
             
             kw = {'color': color, 'marker': marker, 'markersize': 6, 'linewidth': lw, 'alpha': alpha}
             
-            ax1.plot(yrs, vols, label=c + cagr_label, **kw)
-            ax2.plot(yrs, prs, label=c + cagr_label, **kw)
+            # 拆分≤ 2024 和 2025 数据，2025年用虚线
+            yrs_arr = list(zip(yrs, vols, prs))
+            main_pts = [(y, v, p) for y, v, p in yrs_arr if not str(y).startswith('2025')]
+            # 找到连接点（2024最后一个 + 2025）
+            conn_pts = [(y, v, p) for y, v, p in yrs_arr if str(y).startswith('2024') or str(y).startswith('2025')]
+            
+            if main_pts:
+                m_yrs, m_vols, m_prs = zip(*main_pts)
+                ax1.plot(list(m_yrs), list(m_vols), label=c + cagr_label, **kw)
+                ax2.plot(list(m_yrs), list(m_prs), label=c + cagr_label, **kw)
+            
+            # 2025虚线段
+            if len(conn_pts) >= 2:
+                c_yrs, c_vols, c_prs = zip(*conn_pts)
+                kw_dash = {**kw, 'linestyle': ':', 'alpha': alpha * 0.5}
+                kw_dash.pop('marker', None)
+                ax1.plot(list(c_yrs), list(c_vols), **kw_dash)
+                ax2.plot(list(c_yrs), list(c_prs), **kw_dash)
+            
             labels1.append(c)
         
         ax1.set_title("Volume Trend (Raw YTD)"); ax2.set_title("Price Trend")

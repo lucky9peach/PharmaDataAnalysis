@@ -261,6 +261,29 @@ class FlexiblePivotWidget(QWidget):
                 else:
                     df_renamed[num_col] = pd.to_numeric(df_renamed[num_col], errors='coerce').fillna(0.0)
 
+            # ===== 剂型翻译与合并 =====
+            # 提取3字母编码前缀，查表翻译为中文；合并同类变体
+            dosage_map = core_config.DOSAGE_CODE_MAP
+            import re
+            def normalize_dosage(raw):
+                raw = str(raw).strip()
+                if not raw or raw == '未知剂型':
+                    return '未知剂型'
+                raw_upper = raw.upper()
+                # 片剂类全合并
+                if any(kw in raw_upper for kw in ['TABLET', 'TAB', '片']) or any(raw_upper.startswith(c) for c in ['AA', 'AB', 'BA', 'BB']):
+                    return '片剂'
+                # 胶囊类全合并
+                if any(kw in raw_upper for kw in ['CAPSULE', 'CAP', '胶囊']) or any(raw_upper.startswith(c) for c in ['AC', 'BC']):
+                    return '胶囊'
+                # 注射剂类全合并
+                if any(kw in raw_upper for kw in ['INJECT', 'INJ', '注射', 'INFUSION', 'SYRINGE', 'VIAL']):
+                    return '注射剂'
+                # 其他保持原样
+                return raw
+            
+            df_renamed['细分剂型'] = df_renamed['细分剂型'].apply(normalize_dosage)
+
             # 衍生计算列！这里保障核心推导逻辑的精确度
             # 1. 求转换系数(每盒多少粒) = 最小单包装销量 / 大包装销量
             # 使用 numpy divide 避免除 0 报错 (结果变 infinity)
@@ -465,8 +488,10 @@ class FlexiblePivotWidget(QWidget):
         # 顺便加个总计列好排序国家
         pt['总计'] = pt.sum(axis=1)
         pt = pt.sort_values(by='总计', ascending=False)
-        # 去掉行列太多零的情况，美化
-        pt = pt.loc[:, (pt != 0).any(axis=0)]
+        # 去掉没有数据的列（全为0的列不显示）
+        data_cols = [c for c in pt.columns if c != '总计']
+        non_empty_cols = [c for c in data_cols if pt[c].sum() > 0]
+        pt = pt[non_empty_cols + ['总计']]
         
         tab['df_pivot'] = pt
         self._fill_table(tab['table'], pt, is_crosstab=True)

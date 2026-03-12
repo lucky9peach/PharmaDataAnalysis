@@ -26,13 +26,66 @@ def clean_and_cache_data(input_excel_path, output_parquet_dir="Cache", log_callb
         if input_excel_path.lower().endswith('.csv'):
             df = pd.read_csv(input_excel_path, encoding='utf-8-sig', low_memory=False)
         else:
-            # 使用 openpyxl 读取避免告警
             df = pd.read_excel(input_excel_path)
     except Exception as e:
-        log_callback(f"[-] 读取 Excel 失败: {e}")
+        log_callback(f"[-] 读取原始文件失败: {e}")
         return False, ""
         
-    log_callback(f"[*] 获取到 {len(df)} 行数据，执行头文件规范化与清洗...")
+    if df.empty or '检索药名' not in df.columns:
+        log_callback("[-] 表格为空或缺失 '检索药名' 列，无法判定缓存映射。")
+        return False, ""
+
+    log_callback(f"[*] 完整数据加载: {len(df)} 行，开始执行增量缓存校验...")
+    
+    # === NEW: Cache Bypass Logic ===
+    BASE_DIR = os.path.dirname(os.path.abspath(str(input_excel_path)))
+    # input_excel_path 通常在 "Cache" 目录下，比如 "C/Cache/step1_latest.csv"
+    # 我们需要往上一级找 TSM_Downloads
+    if "Cache" in str(BASE_DIR):
+        BASE_DIR = os.path.dirname(str(BASE_DIR))
+        
+    api_views_dir = os.path.join(str(BASE_DIR), "Cache", "API_Views")
+    raw_files_dir = os.path.join(str(BASE_DIR), "TSM_Downloads", "raw_files")
+    
+    apis = df['检索药名'].dropna().unique().tolist()
+    apis_to_drop = []
+    
+    for api in apis:
+        api_str = str(api).strip().upper()
+        if not api_str: continue
+        
+        safe_filename = api_str.replace("/", "_").replace("\\", "_")
+        parquet_path = os.path.join(api_views_dir, f"core_cache_{safe_filename}.parquet")
+        
+        # 1. 检查是否存在最终分片缓存
+        if os.path.exists(parquet_path):
+            cache_mtime = os.path.getmtime(parquet_path)
+            
+            # 2. 获取针对该药所有的原始下载文件的时间戳
+            raw_is_newer = False
+            if os.path.exists(raw_files_dir):
+                for f in os.listdir(raw_files_dir):
+                    if f.endswith('.xlsx') and f"_{api_str}_" in f.upper():
+                        raw_path = os.path.join(raw_files_dir, f)
+                        if os.path.exists(raw_path) and os.path.getmtime(raw_path) > cache_mtime:
+                            raw_is_newer = True
+                            break
+                            
+            # 3. 如果原始文件没有更新过缓存，说明该缓存100%是对齐且生效的
+            if not raw_is_newer:
+                apis_to_drop.append(api)
+                log_callback(f"    [!] 旁路跳过: {api_str} (因后续核心缓存未过期，无需重复清洗)")
+
+    if apis_to_drop:
+        # 将不需要重新洗的 API 行移除
+        df = df[~df['检索药名'].isin(apis_to_drop)]
+        log_callback(f"[*] 因存在新鲜缓存，剥离了 {len(apis_to_drop)} 个无需重算的药物，剩余 {len(df)} 行记录等待清洗。")
+        
+    if df.empty:
+        log_callback("[+] 当前队列中所有药物均具备最新分析缓存，无需发生任何重复清洗与运算！")
+        return True, ""
+        
+    log_callback(f"[*] 开始进行字典映射与结构标准化清洗...")
     
     # 1. 探测与提取中文剂型
     if "中文剂型" not in df.columns:
@@ -111,21 +164,20 @@ def clean_and_cache_data(input_excel_path, output_parquet_dir="Cache", log_callb
     
     # 5. 写入高速 Parquet 缓存
     os.makedirs(output_parquet_dir, exist_ok=True)
-    basename = os.path.basename(input_excel_path)
-    parquet_filename = os.path.splitext(basename)[0] + ".parquet"
-    output_parquet_path = os.path.abspath(os.path.join(output_parquet_dir, parquet_filename))
+    # 我们固定写出一个干净的中转 parquet
+    final_file = os.path.join(output_parquet_dir, "step2_cleaned.parquet")
     
     try:
         # 注意: 如果抛出缺失依赖的异常，需要用户在终端安装 pyarrow: pip install pyarrow
-        df.to_parquet(output_parquet_path, engine='pyarrow', index=False)
-        log_callback(f"[+++] Parquet 转换完成! 已缓存至: {output_parquet_path} (共 {len(df)} 行记录)")
-        return True, output_parquet_path
+        df.to_parquet(final_file, engine='pyarrow', index=False)
+        log_callback(f"[+++] 维度清洗与标准转型完成: {final_file} (共 {len(df)} 行衍生增量记录)")
+        return True, final_file
     
     except ImportError as e:
         log_callback("[-] 错误：缺少 Parquet 支持库！请在终端运行: pip install pyarrow fastparquet")
         return False, ""
     except Exception as e:
-        log_callback(f"[-] Parquet 生成失败: {e}")
+        log_callback(f"[-] 保存清洗缓存 Parquet 失败: {e}")
         return False, ""
 
 # ==========================================

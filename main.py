@@ -182,10 +182,10 @@ class BaseStepWidget(QWidget):
 class Step1Widget(BaseStepWidget):
     def __init__(self):
         super().__init__("Step 1: 外部数据下载聚合 (TSM API)")
-        self.drugs_input = QPlainTextEdit("APIXABAN RIVAROXABAN")
+        self.drugs_input = QPlainTextEdit("Irbesartan Ranolazine Clopidogrel Celecoxib Lamotrigine Topiramate Duloxetine Citalopram Bisoprolol Ticagrelor Memantine Rivaroxaban Tadalafil")
         self.drugs_input.setMinimumHeight(60)
         self.drugs_input.setMaximumHeight(150)
-        self.years_input = QLineEdit("2022")
+        self.years_input = QLineEdit("2020-2025")
         self.drugs_input.setStyleSheet("padding: 5px;")
         self.years_input.setStyleSheet("padding: 5px;")
         self.param_layout.addRow("目标药物名 (空格/换行分隔):", self.drugs_input)
@@ -194,20 +194,85 @@ class Step1Widget(BaseStepWidget):
     def execute(self):
         self.run_btn.setEnabled(False)
         self.console.clear()
-        self.append_log("[*] 初始化网络拉取队列...")
+        self.append_log("[*] 正在扫描本地数据缓存...")
         
-        # Replace newlines with spaces for downloading
         drugs_text = self.drugs_input.toPlainText().replace('\n', ' ')
+        time_period = self.years_input.text()
         
-        func = step_a_download.download_and_aggregate_tsm
-        self.worker = Worker(
-            func, 
-            drug_names=drugs_text, 
-            time_period=self.years_input.text()
-        )
-        self.worker.log_signal.connect(self.append_log)
-        self.worker.finished_signal.connect(self.on_finished)
-        self.worker.start()
+        # 为了不卡死UI，我们使用一个独立的 Worker 来进行纯本地扫描
+        # 这里借助我们刚刚在 step_a_download 抽离解析逻辑和寻找文件逻辑，但为了避免重写大量代码并保持主结构，
+        # 我们采取一个巧妙的方法：让 download_and_aggregate_tsm 增加一个 check_only 模式或者暴露 check 函数
+        # 不过既然咱们在 step_a 已经完善了隔离，只需把 download_and_aggregate_tsm 直接用来执行
+        
+        # 定义一个专门用来做预扫描或真正执行的高级槽函数
+        def _pre_scan_and_ask():
+            # 我们在主线程快速过一遍缺失项，因为只有 os.path.exists 检测，速度非常快（毫秒级）
+            # 所以直接在主线程稍微计算一下 missing 即可，不会卡死 UI
+            import os
+            from step_a_download import get_parsed_drug_names, parse_years
+            
+            parsed_names = get_parsed_drug_names(drugs_text)
+            years_to_fetch = parse_years(time_period)
+            if not parsed_names or not years_to_fetch:
+                 self.append_log("[-] 输入无效，无法解析药名或年份。")
+                 self.run_btn.setEnabled(True)
+                 return
+                 
+            BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+            output_dir = os.path.abspath(os.path.join(BASE_DIR, "TSM_Downloads", "raw_files"))
+            
+            endpoints_to_try = ["MIDS", "ATC"]
+            local_files = []
+            missing_tasks = []
+            
+            for drug_name in parsed_names:
+                for current_year in years_to_fetch:
+                    found_cache = False
+                    for ep in endpoints_to_try:
+                        filename = f"TSM_{current_year}_{drug_name}_{ep}.xlsx"
+                        filepath = os.path.join(output_dir, filename)
+                        if os.path.exists(filepath) and os.path.getsize(filepath) > 1024:
+                            local_files.append((filepath, drug_name))
+                            found_cache = True
+                            break
+                    if not found_cache:
+                        missing_tasks.append((drug_name, current_year))
+            
+            skip_downloads = False
+            if missing_tasks and local_files:
+                # 混杂情况：部分有，部分没有
+                reply = QMessageBox.question(
+                    self, 
+                    "发现本地数据", 
+                    f"扫描到您请求的数据中，本地已有 {len(local_files)} 个缓存，但缺失 {len(missing_tasks)} 个任务。\n\n"
+                    f"选择 [Yes] 去下载缺失的数据（可能较慢）。\n"
+                    f"选择 [No] 放弃下载缺失项，立刻仅凭借现有的本地数据出表（极速）。",
+                    QMessageBox.Yes | QMessageBox.No,
+                    QMessageBox.Yes
+                )
+                if reply == QMessageBox.No:
+                    skip_downloads = True
+            elif missing_tasks and not local_files:
+                self.append_log("[*] 本地无对应缓存，必须请求云端下载...")
+            elif local_files and not missing_tasks:
+                self.append_log("[*] 所有数据均在本地，开始极速提取...")
+                
+            # 设置 flag 给底层 worker
+            # 我们通过 Python 鸭子类型给模块函数动态打个标记
+            step_a_download.download_and_aggregate_tsm.skip_downloads = skip_downloads
+
+            self.append_log("[*] 初始化任务队列...")
+            func = step_a_download.download_and_aggregate_tsm
+            self.worker = Worker(
+                func, 
+                drug_names=drugs_text, 
+                time_period=time_period
+            )
+            self.worker.log_signal.connect(self.append_log)
+            self.worker.finished_signal.connect(self.on_finished)
+            self.worker.start()
+
+        _pre_scan_and_ask()
 
 
 class Step2Widget(BaseStepWidget):
@@ -305,7 +370,9 @@ class EuropeanAnalysisPage(QWidget):
         
         self.originator_combo = CheckableComboBox()
         self.originator_combo.setMinimumWidth(250)
-        self.originator_combo.lineEdit().setPlaceholderText("可手动选择/锁定原研企业...")
+        self.originator_combo.lineEdit().setPlaceholderText("可下拉勾选原研企业...")
+        # 禁用搜索功能，避免每次键入触发showPopup导致乱窜
+        self.originator_combo.lineEdit().setReadOnly(True)
         
         orig_row = QHBoxLayout()
         orig_row.setContentsMargins(0, 0, 0, 0)
@@ -335,7 +402,7 @@ class EuropeanAnalysisPage(QWidget):
 
         top_bar.addWidget(QLabel("选择通用名 (API):"))
         top_bar.addWidget(self.api_combo)
-        top_bar.addWidget(QLabel("标记原研(按单价从高到低):"))
+        top_bar.addWidget(QLabel("标记原研:"))
         top_bar.addWidget(orig_container)
         top_bar.addWidget(self.run_btn)
         top_bar.addWidget(self.tips_label)
@@ -386,24 +453,26 @@ class EuropeanAnalysisPage(QWidget):
         if 'corporation_name' not in df_api.columns or 'sales_value_usd' not in df_api.columns or 'sales_volume_units' not in df_api.columns:
             return
             
-        # 计算出厂均价过滤出企业排序
+        # 计算出厂均价(作为参考保留)，但下拉菜单按企业名称首字母A-Z自动排序
         agg = df_api.groupby('corporation_name').agg(
             Sales=('sales_value_usd', 'sum'),
             Vol=('sales_volume_units', 'sum')
         )
         agg['Price'] = (agg['Sales'] / agg['Vol'].replace({0: np.nan}) * 0.3).fillna(0).round(4)
-        sorted_comps = agg.sort_values(by='Price', ascending=False).index.tolist()
+        sorted_comps = sorted([str(c) for c in agg.index if pd.notna(c)])
         
         self.originator_combo.blockSignals(True)
         self.originator_combo.clear()
         
-        from step4_visualizer import ORIGINATOR_CONFIG
         import core_config
-        from PySide6.QtGui import QStandardItem
         
-        model = self.originator_combo.model()
+        # 自动根据 ORIGINATOR_CONFIG 匹配已知原研企业
+        orig_keywords = core_config.ORIGINATOR_CONFIG.get(str(api_name).upper(), [])
+        
         for c in sorted_comps:
-            self.originator_combo.addCheckableItem(str(c), checked=False)
+            # 检查该企业是否匹配原研关键词
+            is_orig = any(kw.upper() in str(c).upper() for kw in orig_keywords)
+            self.originator_combo.addCheckableItem(str(c), checked=is_orig)
             
         self.originator_combo.updateText()
         self.originator_combo.blockSignals(False)
@@ -744,6 +813,80 @@ class MainWindow(QMainWindow):
         self.stack.addWidget(self.page_pivot)
         self.stack.addWidget(self.page4)
         self.stack.addWidget(self.page5)
+        
+        # 启动时自动扫描 Cache/API_Views 发现新药并增补到 core_config.py
+        self._auto_scan_api_views()
+
+    def _auto_scan_api_views(self):
+        """启动时扫描 Cache/API_Views 目录, 发现新药名自动增补到 core_config.py 的 ORIGINATOR_CONFIG"""
+        try:
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+            api_views_dir = os.path.join(base_dir, "Cache", "API_Views")
+            config_path = os.path.join(base_dir, "core_config.py")
+            
+            if not os.path.isdir(api_views_dir) or not os.path.isfile(config_path):
+                return
+            
+            # 1. 提取所有药物名（从文件名 core_cache_DRUGNAME.parquet）
+            discovered_drugs = set()
+            for f in os.listdir(api_views_dir):
+                if f.startswith("core_cache_") and f.endswith(".parquet"):
+                    drug_name = f.replace("core_cache_", "").replace(".parquet", "").strip().upper()
+                    if drug_name:
+                        discovered_drugs.add(drug_name)
+            
+            if not discovered_drugs:
+                return
+            
+            # 2. 读取当前 core_config.py 中已有的 ORIGINATOR_CONFIG 键
+            existing_drugs = set(k.upper() for k in core_config.ORIGINATOR_CONFIG.keys())
+            
+            # 3. 找出新药（不在已有配置中的）
+            new_drugs = sorted(discovered_drugs - existing_drugs)
+            
+            if not new_drugs:
+                return  # 没有新增需要
+            
+            # 4. 读取 core_config.py 文件内容，找到 ORIGINATOR_CONFIG 的结束位置并插入新条目
+            with open(config_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+            
+            # 找到 ORIGINATOR_CONFIG 中最后一个 } 的位置
+            import re
+            # 匹配 ORIGINATOR_CONFIG = { ... } 块 — 找到 } 之前插入新行
+            pattern = r'(ORIGINATOR_CONFIG\s*=\s*\{)(.*?)(^\})'
+            match = re.search(pattern, content, re.DOTALL | re.MULTILINE)
+            
+            if not match:
+                return
+            
+            # 在 } 之前插入新条目
+            existing_block = match.group(2)
+            new_entries = []
+            for drug in new_drugs:
+                # 确保不重复（大小写不敏感）
+                if f'"{drug}"' not in existing_block and f"'{drug}'" not in existing_block:
+                    new_entries.append(f'    "{drug}":' + ' ' * max(1, 16 - len(drug)) + '[],' + f'  # TODO: 请填写原研企业关键词')
+            
+            if not new_entries:
+                return
+            
+            # 把新行插入到 } 之前
+            insert_text = "\n    # --- 以下为自动扫描发现的新药，请手动补充原研企业 ---\n" + "\n".join(new_entries) + "\n"
+            new_content = content[:match.start(3)] + insert_text + content[match.start(3):]
+            
+            with open(config_path, 'w', encoding='utf-8') as f:
+                f.write(new_content)
+            
+            print(f"[AutoScan] 已自动发现并增补 {len(new_entries)} 个新药到 core_config.py: {[d for d in new_drugs if any(d in e for e in new_entries)]}")
+            
+            # 5. 同时更新内存中的 ORIGINATOR_CONFIG
+            for drug in new_drugs:
+                if drug not in core_config.ORIGINATOR_CONFIG:
+                    core_config.ORIGINATOR_CONFIG[drug] = []
+                    
+        except Exception as e:
+            print(f"[AutoScan] 扫描 API_Views 时出错（不影响主程序）: {e}")
 
     def toggle_main_sidebar(self):
         self.main_sidebar.setVisible(not self.main_sidebar.isVisible())
@@ -795,11 +938,23 @@ class MainWindow(QMainWindow):
                             self._cached_combined_df = pd.concat(dfs, ignore_index=True)
                 
                 if self._cached_combined_df is not None and not self._cached_combined_df.empty:
+                    # Filter data to only show APIs requested in Step 1
+                    searched_drugs_text = self.page1.drugs_input.toPlainText().replace('\n', ' ').strip()
+                    if searched_drugs_text:
+                        from step_a_download import get_parsed_drug_names
+                        parsed_names = get_parsed_drug_names(searched_drugs_text)
+                        if parsed_names and 'api_name' in self._cached_combined_df.columns:
+                            filtered_df = self._cached_combined_df[self._cached_combined_df['api_name'].isin(parsed_names)]
+                        else:
+                            filtered_df = self._cached_combined_df
+                    else:
+                        filtered_df = self._cached_combined_df
+
                     if index == 4:
-                        self.page4.set_dataframe(self._cached_combined_df)
+                        self.page4.set_dataframe(filtered_df)
                         self.page4.on_filter_changed({})
                     elif index == 5:
-                        self.page5.set_data(self._cached_combined_df)
+                        self.page5.set_data(filtered_df)
             except Exception as e:
                 import traceback
                 print("Failed to auto-load databse for plotting:", traceback.format_exc())
@@ -810,9 +965,15 @@ class MainWindow(QMainWindow):
         self.page2.execute()
         
     def on_step2_done(self, parquet_path):
-        self.page3.set_input(parquet_path)
-        self.switch_page(2)
-        self.page3.execute()
+        if parquet_path:
+            self.page3.set_input(parquet_path)
+            self.switch_page(2)
+            self.page3.execute()
+        else:
+            # 走到这里意味着步骤2被纯缓存旁路跳过了（全部已存在最新缓存）
+            self.append_log("[*] 检测到清洗阶段全部使用旁路缓存，自动跳转至底层合成 (Step 4 可点击切换查看) ...")
+            # 既然跳过了说明API_Views里都有最新的数据，我们直接帮用户切到Step4并加载
+            self.switch_page(4)
         
     def on_step3_done(self, out_dir):
         self._cached_combined_df = None # 置空缓存，强制重新读取

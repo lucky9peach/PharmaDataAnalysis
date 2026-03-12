@@ -18,7 +18,13 @@ COLUMN_MAPPING = {
     "销售额": "sales_value",
     "最小单包装销售数量": "units_small",
     "大包装销售数量": "units_large",
-    "公斤": "api_kg"
+    "公斤": "api_kg",
+    # --- 新增的扩展维度 ---
+    "渠道": "channel",
+    "商品名": "brand_name",
+    "生产企业": "manufacturer",
+    "盐/离子": "salt_ion",
+    "通用名复": "generic_name_complex"
 }
 
 
@@ -36,7 +42,13 @@ COLUMN_TYPES = {
     "sales_value": "float",
     "units_small": "float",
     "units_large": "float",
-    "api_kg": "float"
+    "api_kg": "float",
+    # --- 新增的扩展维度 ---
+    "channel": "string",
+    "brand_name": "string",
+    "manufacturer": "string",
+    "salt_ion": "string",
+    "generic_name_complex": "string"
 }
 
 
@@ -92,20 +104,105 @@ ORIGINATOR_CONFIG = {
     "APIXABAN":     ["BRISTOL", "PFIZER", "SQUIBB"],
     "CITALOPRAM":   ["LUNDBECK"],
     "RIVAROXABAN":  ["BAYER"],
-    "TADALAFIL":    ["LILLY", "ICOS", "GLAXO"],
+    "IRBESARTAN":   ["SANOFI", "BRISTOL", "SQUIBB"],
+    "RANOLAZINE":   ["GILEAD"],
+    "CLOPIDOGREL":  ["SANOFI", "BRISTOL", "SQUIBB"],
+    "CELECOXIB":    ["PFIZER"],
+    "LAMOTRIGINE":  ["GSK"],
+    "TOPIRAMATE":   ["JANSSEN"],
+    "DULOXETINE":   ["LILLY"],
+    "BISOPROLOL":   ["MERCK"],
     "TICAGRELOR":   ["ASTRAZENECA"],
-    "TOBISILATE":   ["ETHAMSYLATE"],
-    "ROSUVASTATIN": ["ASTRAZENECA"],
-    "ATORVASTATIN": ["PFIZER"],
-    "METFORMIN":    ["MERCK", "GLUCOPHAGE"],
-    "AMLODIPINE":   ["PFIZER"],
-    "LISINOPRIL":   ["ASTRAZENECA", "MERCK"],
-    "LOSARTAN":     ["MERCK", "COZAAR"],
-    "OLMESARTAN":   ["DAIICHI", "SANKYO"],
-    "VALSARTAN":    ["NOVARTIS"],
-    "EMPAGLIFLOZIN":["BOEHRINGER", "LILLY"],
-    "DAPAGLIFLOZIN":["ASTRAZENECA"],
-    "SITAGLIPTIN":  ["MERCK", "MSD"],
+    "MEMANTINE":    ["MERZ"],
+    "TADALAFIL":    ["LILLY"],
+
+    # --- 以下为自动扫描发现的新药，请手动补充原研企业 ---
+    "ACETOHEXAMIDE":   [],  # TODO: 请填写原研企业关键词
+    "ACETONIDE":       [],  # TODO: 请填写原研企业关键词
+    "AMIODARONE":      [],  # TODO: 请填写原研企业关键词
+    "AMITRIPTYLINE":   [],  # TODO: 请填写原研企业关键词
+    "ANASTROZOLE":     [],  # TODO: 请填写原研企业关键词
+    "ATROPINE":        [],  # TODO: 请填写原研企业关键词
+    "BACLOFEN":        [],  # TODO: 请填写原研企业关键词
+    "BRIMONIDINE":     [],  # TODO: 请填写原研企业关键词
+    "BROMPHENIRAMINE": [],  # TODO: 请填写原研企业关键词
+    "BUPROPION":       [],  # TODO: 请填写原研企业关键词
+    "CALCITONIN":      [],  # TODO: 请填写原研企业关键词
+    "CARBAMAZEPINE":   [],  # TODO: 请填写原研企业关键词
+    "CHLORDIAZEPOXIDE": [],  # TODO: 请填写原研企业关键词
+    "CHLORPROPAMIDE":  [],  # TODO: 请填写原研企业关键词
+    "CHOLINE":         [],  # TODO: 请填写原研企业关键词
+    "CIMETIDINE":      [],  # TODO: 请填写原研企业关键词
+    "CLOBAZAM":        [],  # TODO: 请填写原研企业关键词
+    "CLOFIBRATE":      [],  # TODO: 请填写原研企业关键词
+    "CODEINE":         [],  # TODO: 请填写原研企业关键词
+    "DESIPRAMINE":     [],  # TODO: 请填写原研企业关键词
+    "DEXAMETHASONE":   [],  # TODO: 请填写原研企业关键词
+    "DICLOFENAC":      [],  # TODO: 请填写原研企业关键词
+    "DIPHENHYDRAMINE": [],  # TODO: 请填写原研企业关键词
+    "DIPHENOXYLATE":   [],  # TODO: 请填写原研企业关键词
+    "DROXIDOPA":       [],  # TODO: 请填写原研企业关键词
+    "ESTRADIOL":       [],  # TODO: 请填写原研企业关键词
+    "FENOFIBRATE":     [],  # TODO: 请填写原研企业关键词
+    "FENOPROFEN":      [],  # TODO: 请填写原研企业关键词
+    "FLUOCINOLONE":    [],  # TODO: 请填写原研企业关键词
+    "FLUOXETINE":      [],  # TODO: 请填写原研企业关键词
+    "FLUOXYMESTERONE": [],  # TODO: 请填写原研企业关键词
+    "FLUPHENAZINE":    [],  # TODO: 请填写原研企业关键词
+    "FLURAZEPAM":      [],  # TODO: 请填写原研企业关键词
+    "FLUVOXAMINE":     [],  # TODO: 请填写原研企业关键词
+    "FOSINOPRIL":      [],  # TODO: 请填写原研企业关键词
+    "GLUTETHIMIDE":    [],  # TODO: 请填写原研企业关键词
+    "HYDRALAZINE":     [],  # TODO: 请填写原研企业关键词
+    "HYDROCHLOROTHIAZIDE": [],  # TODO: 请填写原研企业关键词
+    "HYDROCODONE":     [],  # TODO: 请填写原研企业关键词
+    "HYDROCORTISONE":  [],  # TODO: 请填写原研企业关键词
+    "HYDROFLUMETHIAZIDE": [],  # TODO: 请填写原研企业关键词
+    "HYDROXYZINE":     [],  # TODO: 请填写原研企业关键词
+    "IMIPRAMINE":      [],  # TODO: 请填写原研企业关键词
+    "LETROZOLE":       [],  # TODO: 请填写原研企业关键词
+    "LORAZEPAM":       [],  # TODO: 请填写原研企业关键词
+    "MEDROXYPROGESTERONE": [],  # TODO: 请填写原研企业关键词
+    "MEGESTROL":       [],  # TODO: 请填写原研企业关键词
+    "MEPROBAMATE":     [],  # TODO: 请填写原研企业关键词
+    "METFORMIN":       [],  # TODO: 请填写原研企业关键词
+    "METHOCARBAMOL":   [],  # TODO: 请填写原研企业关键词
+    "METHYCLOTHIAZIDE": [],  # TODO: 请填写原研企业关键词
+    "METHYLTESTOSTERONE": [],  # TODO: 请填写原研企业关键词
+    "METOCLOPRAMIDE":  [],  # TODO: 请填写原研企业关键词
+    "MINOXIDIL":       [],  # TODO: 请填写原研企业关键词
+    "MIRTAZAPINE":     [],  # TODO: 请填写原研企业关键词
+    "OSELTAMIVIR":     [],  # TODO: 请填写原研企业关键词
+    "OXANDROLONE":     [],  # TODO: 请填写原研企业关键词
+    "OXYBUTYNIN":      [],  # TODO: 请填写原研企业关键词
+    "PAROXETINE":      [],  # TODO: 请填写原研企业关键词
+    "PENTOXIFYLLINE":  [],  # TODO: 请填写原研企业关键词
+    "PHENDIMETRAZINE": [],  # TODO: 请填写原研企业关键词
+    "PHENTERMINE":     [],  # TODO: 请填写原研企业关键词
+    "PRAZEPAM":        [],  # TODO: 请填写原研企业关键词
+    "PREDNISONE":      [],  # TODO: 请填写原研企业关键词
+    "PROMETHAZINE":    [],  # TODO: 请填写原研企业关键词
+    "PROPAFENONE":     [],  # TODO: 请填写原研企业关键词
+    "PROPRANOLOL":     [],  # TODO: 请填写原研企业关键词
+    "PSEUDOEPHEDRINE": [],  # TODO: 请填写原研企业关键词
+    "QUINIDINE":       [],  # TODO: 请填写原研企业关键词
+    "RESERPINE":       [],  # TODO: 请填写原研企业关键词
+    "SALMON":          [],  # TODO: 请填写原研企业关键词
+    "SOTALOL":         [],  # TODO: 请填写原研企业关键词
+    "SPIRONOLACTONE":  [],  # TODO: 请填写原研企业关键词
+    "SULFAMETHOXAZOLE": [],  # TODO: 请填写原研企业关键词
+    "TEMAZEPAM":       [],  # TODO: 请填写原研企业关键词
+    "TESTOSTERONE":    [],  # TODO: 请填写原研企业关键词
+    "TIMOLOL":         [],  # TODO: 请填写原研企业关键词
+    "TOLAZAMIDE":      [],  # TODO: 请填写原研企业关键词
+    "TRAZODONE":       [],  # TODO: 请填写原研企业关键词
+    "TRIMETHOPRIM":    [],  # TODO: 请填写原研企业关键词
+    "TRIMIPRAMINE":    [],  # TODO: 请填写原研企业关键词
+    "TRIPROLIDINE":    [],  # TODO: 请填写原研企业关键词
+    "TROSPIUM":        [],  # TODO: 请填写原研企业关键词
+    "WARFARIN":        [],  # TODO: 请填写原研企业关键词
+    "ZALEPLON":        [],  # TODO: 请填写原研企业关键词
+    "ZONISAMIDE":      [],  # TODO: 请填写原研企业关键词
 }
 
 
